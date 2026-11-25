@@ -14,6 +14,17 @@ final class FinderMountTests: XCTestCase {
         XCTAssertEqual(target.finderVolume, path)
     }
 
+    func testEncryptedUpdateRequiresOneMountedVolumeWithPositiveIdentity() {
+        let path = URL(fileURLWithPath: "/Volumes/Test")
+        var target = APFSProtectionTarget(id: 1, wholeBSD: "whole", members: ["volume": 2],
+                                          containers: [], mountedVolumes: ["volume": path])
+        XCTAssertNil(target.encryptedFinderVolume)
+        target.encryptedVolumeUUIDs["volume"] = UUID()
+        XCTAssertEqual(target.encryptedFinderVolume, path)
+        target.mountedVolumes["sibling"] = URL(fileURLWithPath: "/Volumes/Other")
+        XCTAssertNil(target.encryptedFinderVolume)
+    }
+
     func testStalledFinderPreflightReleasesControlsAndIgnoresLateResult() {
         let started = expectation(description: "Inventory scan started")
         let expired = expectation(description: "Controls released")

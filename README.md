@@ -40,6 +40,17 @@ Open **Settings → General** to configure SSD Protect:
   Turning off a drive’s protection forgets its rule. Turning off restoration
   clears all saved rules and keeps current protection active until disconnect or quit.
 
+- **Hide Finder Eject on encrypted APFS** updates the mount in place when you
+  switch protection on or off for a verified external drive with one mounted
+  encrypted APFS volume. Install the app in Applications, enable the setting,
+  and approve SSD Protect under System Settings → General → Login Items &
+  Extensions. macOS retains approval for the on-demand helper. After an
+  update, choose **Relaunch Finder…** to refresh Locations and Computer.
+  Open files on the drive stay accessible. Turning off the setting unregisters
+  the helper. If the helper is unavailable, the protection switch still controls
+  ordinary eject protection. Use the drive’s **Hide Finder Eject…** or
+  **Restore Finder Eject…** action to retry.
+
 The **App icon** picker offers System, Light Cradle and Dark Cradle for the
 running app and About. Finder uses the installed bundle’s system icon.
 

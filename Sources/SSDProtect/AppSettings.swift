@@ -21,6 +21,9 @@ struct AppSettings: View {
 }
 
 struct GeneralSettings: View {
+    @StateObject private var finderHelper = LoginItem(status: { FinderHelper.service.status }, change: { enabled in
+        if enabled { try FinderHelper.service.register() } else { try FinderHelper.service.unregister() }
+    })
     @AppStorage("hideFinderEject") private var hideFinderEject = false
     @Binding var restoresProtection: Bool
     let sessionOnlyCount: Int
@@ -60,7 +63,20 @@ struct GeneralSettings: View {
             Divider()
             VStack(alignment: .leading, spacing: 7) {
                 Toggle("Hide Finder Eject on protection changes", isOn: $hideFinderEject)
-                Text("Hiding Eject remounts an eligible unencrypted APFS volume. Encrypted volumes keep their Finder Eject button and use ordinary eject protection.").foregroundStyle(.secondary)
+                Text("Hiding Eject remounts an eligible unencrypted APFS volume. This option applies only to unencrypted volumes.").foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                Toggle("Hide Finder Eject on encrypted APFS", isOn: Binding(
+                    get: { finderHelper.status == .enabled || finderHelper.status == .requiresApproval },
+                    set: finderHelper.setRequested
+                ))
+                Text("Approve the Finder helper once to update mounted encrypted volumes when protection changes. Turning this off unregisters the helper.")
+                    .foregroundStyle(.secondary)
+                if finderHelper.status == .requiresApproval {
+                    Text("Approve SSD Protect in System Settings to enable the Finder helper.").foregroundStyle(.secondary)
+                    Button("Open Login Items…") { SMAppService.openSystemSettingsLoginItems() }
+                }
+                if let error = finderHelper.errorMessage { Text(error).foregroundStyle(.secondary) }
             }
             Divider()
             VStack(alignment: .leading, spacing: 8) {
@@ -85,9 +101,10 @@ struct GeneralSettings: View {
         .toggleStyle(.switch)
         .fixedSize(horizontal: false, vertical: true)
         .padding(24)
-        .onAppear { login.refresh() }
+        .onAppear { login.refresh(); finderHelper.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             login.refresh()
+            finderHelper.refresh()
         }
     }
 

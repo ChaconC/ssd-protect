@@ -195,12 +195,16 @@ public final class Arbitrator {
         }
     }
 
-    public func protect(_ target: APFSProtectionTarget, enabled: Bool) {
-        guard enabled else { disableAPFSProtection(for: target.id); return }
+    public func protect(_ target: APFSProtectionTarget, enabled: Bool, completion: ((Bool) -> Void)? = nil) {
+        guard enabled else {
+            disableAPFSProtection(for: target.id)
+            queue.async { DispatchQueue.main.async { completion?(true) } }
+            return
+        }
         queue.async {
             let request = UUID()
             self.pendingEnrollment[target.id] = request
-            self.verifyEnrollment(target, request: request)
+            self.verifyEnrollment(target, request: request, completion: completion)
         }
     }
 
@@ -213,15 +217,18 @@ public final class Arbitrator {
         }
     }
 
-    private func verifyEnrollment(_ target: APFSProtectionTarget, request: UUID) {
+    private func verifyEnrollment(_ target: APFSProtectionTarget, request: UUID, completion: ((Bool) -> Void)?) {
         let revision = topologyRevision
         verifier.async {
             let rows = try? DriveInventory.read(testImageID: self.testImageID)
             let verified = rows?.contains { $0.apfsTarget == target } == true
             self.queue.async {
-                guard self.pendingEnrollment[target.id] == request else { return }
+                guard self.pendingEnrollment[target.id] == request else {
+                    DispatchQueue.main.async { completion?(false) }
+                    return
+                }
                 guard self.topologyRevision == revision else {
-                    self.verifyEnrollment(target, request: request)
+                    self.verifyEnrollment(target, request: request, completion: completion)
                     return
                 }
                 self.pendingEnrollment.removeValue(forKey: target.id)
@@ -229,12 +236,14 @@ public final class Arbitrator {
                       let root = DADiskCreateFromBSDName(nil, session, target.wholeBSD),
                       Media.attachmentID(root) == target.id else {
                     self.report("APFS topology changed. Recheck the drive before enabling protection.")
+                    DispatchQueue.main.async { completion?(false) }
                     return
                 }
                 self.enrollments.enroll(target)
                 self.saveSelection(target.id)
                 self.rememberMembers(of: target)
                 self.publish()
+                DispatchQueue.main.async { completion?(true) }
             }
         }
     }

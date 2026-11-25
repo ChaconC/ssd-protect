@@ -11,6 +11,7 @@ public struct APFSProtectionTarget: Equatable {
     public internal(set) var mountedVolumes: [String: URL] = [:]
 
     var unencryptedMountedMembers: Set<String> = []
+    var encryptedVolumeUUIDs: [String: UUID] = [:]
     var singleVolumeBSD: String? = nil
 
     public internal(set) var singleVolumeLocked = false
@@ -68,6 +69,7 @@ public struct APFSProtectionTarget: Equatable {
         }
         var members: [String: UInt64] = [:]
         var mounted: [String: URL] = [:]
+        var encrypted: [String: UUID] = [:]
         var unencrypted: Set<String> = []
         for name in aliases {
             guard let disk = DADiskCreateFromBSDName(nil, session, name),
@@ -76,6 +78,12 @@ public struct APFSProtectionTarget: Equatable {
             if let path = details[kDADiskDescriptionVolumePathKey] as? URL {
                 guard path.isFileURL, path.path != "/" else { return nil }
                 mounted[name] = path
+                if hardware.kind == .external, details[kDADiskDescriptionMediaEncryptedKey] as? Bool == true,
+                   details[kDADiskDescriptionVolumeKindKey] as? String == "apfs",
+                   let value = details[kDADiskDescriptionVolumeUUIDKey],
+                   CFGetTypeID(value as CFTypeRef) == CFUUIDGetTypeID() {
+                    encrypted[name] = UUID(uuidString: CFUUIDCreateString(nil, (value as! CFUUID)) as String)
+                }
                 if details[kDADiskDescriptionMediaEncryptedKey] as? Bool == false { unencrypted.insert(name) }
             }
             members[name] = id
@@ -98,7 +106,7 @@ public struct APFSProtectionTarget: Equatable {
         }
         return Self(id: media.id, wholeBSD: device.id, members: members, containers: containers,
                     mountedVolumes: mounted, unencryptedMountedMembers: unencrypted,
-                    singleVolumeBSD: singleVolume, singleVolumeLocked: locked)
+                    encryptedVolumeUUIDs: encrypted, singleVolumeBSD: singleVolume, singleVolumeLocked: locked)
     }
 
     // An APFS sibling can appear between inventory scans. Bind it on the serial
@@ -111,7 +119,7 @@ public struct APFSProtectionTarget: Equatable {
     }
 
     // Verify the independently enumerated BSD names against a single live registry lineage.
-    private static func memberID(_ disk: DADisk, under root: UInt64) -> UInt64? {
+    static func memberID(_ disk: DADisk, under root: UInt64) -> UInt64? {
         var entry = DADiskCopyIOMedia(disk)
         var first: UInt64?
         while entry != 0 {
