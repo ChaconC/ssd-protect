@@ -561,12 +561,14 @@ public final class Arbitrator {
 
     public func remount(_ target: APFSProtectionTarget, named name: String) {
         queue.async { [self] in
-            guard active == nil, target.canRemount, let bsd = target.singleVolumeBSD else { return }
+            guard active == nil, target.mountedVolumes.isEmpty, let bsd = target.singleVolumeBSD else { return }
             let token = UUID()
             active = (token, target.id)
             report("Mounting \(name)…")
-            queue.asyncAfter(deadline: .now() + 60) { [self] in
-                if active?.token == token { finish("Mount timed out. Check the drive in Disk Utility.") }
+            if !target.singleVolumeLocked {
+                queue.asyncAfter(deadline: .now() + 60) { [self] in
+                    if active?.token == token { finish("Mount timed out. Check the drive in Disk Utility.") }
+                }
             }
             verifier.async {
                 let rows = try? self.readForRecheck(false)
@@ -578,6 +580,23 @@ public final class Arbitrator {
                           let media = Media(disk), media.id == target.members[bsd],
                           media.description[kDADiskDescriptionVolumePathKey] == nil else {
                         finish("Drive changed. Reopen the drive menu.")
+                        return
+                    }
+                    if target.singleVolumeLocked {
+                        let requested = DiskUnlock.request(for: media) { [self] in
+                            queue.async { [self] in
+                                guard active?.token == token else { return }
+                                topologyDidChange()
+                                guard let fresh = DADiskCreateFromBSDName(nil, session, bsd).flatMap(Media.init),
+                                      fresh.id == media.id else {
+                                    finish("Drive changed. Reopen the drive menu.")
+                                    return
+                                }
+                                finish(fresh.description[kDADiskDescriptionVolumePathKey] is URL
+                                       ? "Mounted \(name)." : "\(name) is unmounted.")
+                            }
+                        }
+                        if !requested { finish("Select \(name) in Disk Utility and click Mount.") }
                         return
                     }
                     let reply = Reply { [self] dissent in

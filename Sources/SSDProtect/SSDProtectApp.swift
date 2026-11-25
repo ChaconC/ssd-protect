@@ -257,7 +257,7 @@ struct DriveMenu: View {
                 if let id = row.attachment { restorationNote(for: id) }
                 if row.volumes.count > 1 { Text(row.volumes.joined(separator: ", ")) }
                 if row.apfsTarget?.mountedVolumes.isEmpty == true {
-                    Text(row.apfsTarget?.singleVolumeLocked == true ? "Locked. Unlock in Disk Utility." : "Unmounted")
+                    Text(row.apfsTarget?.singleVolumeLocked == true ? "Locked" : "Unmounted")
                 } else if suspended != nil {
                     Text("Protection suspended until the drive can be verified.")
                 } else if row.apfsTarget == nil {
@@ -265,11 +265,16 @@ struct DriveMenu: View {
                 }
             } actions: {
                 if let target = row.apfsTarget, target.mountedVolumes.isEmpty {
-                    if target.canRemount {
-                        Button("Mount") { model.arbitrator.remount(target, named: row.name) }
-                            .accessibilityLabel("Mount \(row.name)")
+                    if target.canRemount || target.singleVolumeLocked {
+                        Button {
+                            model.arbitrator.remount(target, named: row.name)
+                        } label: {
+                            if target.singleVolumeLocked { Label("Mount…", systemImage: "lock.fill") }
+                            else { Text("Mount") }
+                        }
+                            .accessibilityLabel(target.singleVolumeLocked ? "Unlock and mount \(row.name)" : "Mount \(row.name)")
                             .disabled(controlsUnavailable)
-                    } else if !target.singleVolumeLocked {
+                    } else {
                         Button("Eject…") { model.confirm(target, named: row.name) }.disabled(controlsUnavailable)
                     }
                 } else if let target = row.apfsTarget, suspended == nil {
