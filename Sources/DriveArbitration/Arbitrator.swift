@@ -755,7 +755,10 @@ extension Arbitrator {
                                   flags: UInt32, enabled: Bool, token: UUID) {
         var staging: URL?
         if !enabled {
-            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            // Use one hidden mount-point name per attachment. Finder can retain
+            // obsolete display entries for every distinct path it has observed.
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent(".ssd-protect-remount-\(member)", isDirectory: true)
             do {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
                                                         attributes: [.posixPermissions: 0o700])

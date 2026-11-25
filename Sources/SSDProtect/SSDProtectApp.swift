@@ -81,18 +81,27 @@ private final class MenuModel: ObservableObject {
             alert.informativeText = "This will eject the entire drive. No volumes are currently mounted."
         } else {
             alert.informativeText = "Save your work and stop transfers. Ejecting this drive will unmount every volume listed below."
-            let list = NSHostingView(rootView: ScrollView {
-                Text(verbatim: paths.joined(separator: "\n"))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+            if paths.joined(separator: "\n").count < 240 && paths.count <= 4 {
+                alert.informativeText += "\n\n" + paths.joined(separator: "\n")
+            } else {
+                alert.accessoryView = scrollablePaths(paths)
             }
-            .frame(maxHeight: 160)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(width: 280))
-            list.setFrameSize(list.fittingSize)
-            alert.accessoryView = list
         }
         if confirmsEject(alert) { arbitrator.ejectConfirmed(target) }
+    }
+
+    private func scrollablePaths(_ paths: [String]) -> NSView {
+        let list = NSHostingView(rootView: ScrollView {
+            Text(verbatim: paths.joined(separator: "\n"))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 6)
+        .frame(maxHeight: 160)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 280))
+        list.setFrameSize(list.fittingSize)
+        return list
     }
 
     private func confirmsEject(_ alert: NSAlert) -> Bool {
@@ -153,6 +162,7 @@ private struct DriveMenu: View {
     let requestQuit: (NSWindow) -> Void
     @StateObject private var option = OptionKey()
     @State private var showsSimulatorImages = false
+    @State private var listHeight: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -194,11 +204,16 @@ private struct DriveMenu: View {
                     } else if rows.isEmpty && model.inventory.drives.isEmpty {
                         Text("No drives to show.").foregroundStyle(.secondary)
                     }
-                }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
             }
-            .frame(maxHeight: 370)
-            .fixedSize(horizontal: false, vertical: true)
-            if !model.inventory.message.isEmpty { Text(model.inventory.message).font(.callout) }
+            .frame(height: min(370, max(1, listHeight)))
+            if !model.inventory.message.isEmpty {
+                Text(model.inventory.message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
             Divider()
             HStack {
                 SettingsLink {
