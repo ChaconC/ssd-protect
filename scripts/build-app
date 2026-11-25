@@ -5,7 +5,7 @@ swift build -c release --product SSDProtect
 bin=$(swift build -c release --show-bin-path)
 app=".build/SSD Protect.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-xcrun actool App/Assets.xcassets App/AppIcon.icon \
+xcrun actool App/AppIcon.icon \
     --compile "$app/Contents/Resources" --platform macosx --target-device mac \
     --minimum-deployment-target 14.0 --app-icon AppIcon \
     --output-partial-info-plist .build/icon-info.plist
