@@ -9,6 +9,7 @@ xcrun actool "$PWD/App/AppIcon.icon" \
     --compile "$app/Contents/Resources" --platform macosx --target-device mac \
     --minimum-deployment-target 14.0 --app-icon AppIcon \
     --output-partial-info-plist "$PWD/.build/icon-info.plist"
+cp App/IconAppearances/*.png "$app/Contents/Resources/"
 cp App/Info.plist "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Merge .build/icon-info.plist" "$app/Contents/Info.plist"
 cp "$bin/SSDProtect" "$app/Contents/MacOS/SSDProtect"

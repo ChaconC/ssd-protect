@@ -5,13 +5,14 @@ import SwiftUI
 struct AppSettings: View {
     @Binding var restoresProtection: Bool
     let sessionOnlyCount: Int
+    @ObservedObject var appIcons: AppIconSettings
     @StateObject var login = LoginItem()
 
     var body: some View {
         TabView {
-            GeneralSettings(restoresProtection: $restoresProtection, sessionOnlyCount: sessionOnlyCount, login: login)
+            GeneralSettings(restoresProtection: $restoresProtection, sessionOnlyCount: sessionOnlyCount, login: login, appIcons: appIcons)
                 .tabItem { Label("General", systemImage: "gearshape") }
-            AboutSettings()
+            AboutSettings(appIcons: appIcons)
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
         .frame(width: 392)
@@ -23,6 +24,7 @@ struct GeneralSettings: View {
     @Binding var restoresProtection: Bool
     let sessionOnlyCount: Int
     @ObservedObject var login: LoginItem
+    @ObservedObject var appIcons: AppIconSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -54,6 +56,25 @@ struct GeneralSettings: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("App icon")
+                Picker("App icon", selection: Binding(get: { appIcons.choice }, set: appIcons.select)) {
+                    ForEach(AppIconChoice.allCases, id: \.self) { choice in
+                        VStack(spacing: 4) {
+                            Image(nsImage: appIcons.preview(choice)).resizable().interpolation(.high)
+                                .frame(width: 38, height: 38).accessibilityHidden(true)
+                            Text(choice.title)
+                        }
+                        .frame(width: 82)
+                        .tag(choice)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.radioGroup)
+                .horizontalRadioGroupLayout()
+                if let error = appIcons.errorMessage { Text(error).foregroundStyle(.secondary) }
+            }
         }
         .toggleStyle(.switch)
         .fixedSize(horizontal: false, vertical: true)
@@ -76,11 +97,12 @@ struct GeneralSettings: View {
 }
 
 struct AboutSettings: View {
+    @ObservedObject var appIcons: AppIconSettings
     var bundle = Bundle.main
 
     var body: some View {
         VStack(spacing: 8) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: bundle.bundlePath))
+            Image(nsImage: appIcons.preview(appIcons.choice))
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 112, height: 112)

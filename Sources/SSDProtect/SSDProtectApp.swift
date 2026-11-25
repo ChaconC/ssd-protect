@@ -106,7 +106,7 @@ struct SSDProtectApp: App {
             AppSettings(restoresProtection: Binding(
                 get: { model.inventory.restoresProtection },
                 set: model.arbitrator.setRestoresProtection
-            ), sessionOnlyCount: model.inventory.sessionOnly.count)
+            ), sessionOnlyCount: model.inventory.sessionOnly.count, appIcons: delegate.appIcons)
         }
         .windowResizability(.contentSize)
     }
