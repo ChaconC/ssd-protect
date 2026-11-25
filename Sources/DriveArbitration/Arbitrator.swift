@@ -644,3 +644,136 @@ private extension Inventory {
         self.message = message
     }
 }
+
+extension Arbitrator {
+    /// Called after the user confirms the exact mount snapshot shown in the alert.
+    public func changeFinderProtection(_ target: APFSProtectionTarget, enabled: Bool) {
+        queue.async { [self] in
+            guard active == nil, !uncertain.contains(target.id),
+                  let path = target.finderVolume, let bsd = target.mountedVolumes.keys.first,
+                  let member = target.members[bsd] else { report("Reopen the drive menu and verify the mounted volume."); return }
+            let token = UUID()
+            active = (token, target.id)
+            pendingEnrollment.removeValue(forKey: target.id)
+            report("Checking \(path.lastPathComponent)…")
+            verifier.async {
+                let rows = try? DriveInventory.read()
+                let verified = rows?.contains { $0.kind == .external && $0.apfsTarget == target } == true
+                self.queue.async {
+                    guard self.active?.token == token else { return }
+                    guard verified, let flags = FinderMount.flags(at: path),
+                          let session = self.session, let disk = DADiskCreateFromBSDName(nil, session, bsd),
+                          let media = Media(disk), media.id == member,
+                          media.description[kDADiskDescriptionVolumePathKey] as? URL == path,
+                          media.description[kDADiskDescriptionVolumeKindKey] as? String == "apfs" else {
+                        self.finish("Drive or mount changed. Reopen the drive menu.")
+                        return
+                    }
+                    guard FinderMount.supports(flags: flags) else {
+                        self.finish("This volume uses mount options that SSD Protect cannot preserve.")
+                        return
+                    }
+                    self.remountForFinder(target, disk: disk, path: path, member: member,
+                                          flags: flags, enabled: enabled, token: token)
+                }
+            }
+        }
+    }
+
+    private func remountForFinder(_ target: APFSProtectionTarget, disk: DADisk, path: URL, member: UInt64,
+                                  flags: UInt32, enabled: Bool, token: UUID) {
+        var staging: URL?
+        if !enabled {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                        attributes: [.posixPermissions: 0o700])
+                staging = directory.resolvingSymlinksInPath()
+            } catch { finish("Couldn’t prepare the temporary mount point."); return }
+        }
+        func end(_ text: String) {
+            if let staging { _ = rmdir(staging.path) }
+            finish(text)
+        }
+        func valid() -> Bool {
+            guard active?.token == token, let session,
+                  let root = DADiskCreateFromBSDName(nil, session, target.wholeBSD),
+                  Media.attachmentID(root) == target.id, Media.attachmentID(disk) == member else {
+                if active?.token == token { end("Drive disconnected during remount.") }
+                return false
+            }
+            return true
+        }
+        func verify() {
+            guard valid() else { return }
+            guard let current = FinderMount.flags(at: path),
+                  (current & UInt32(MNT_AUTOMOUNTED) != 0) == enabled,
+                  let session, let mounted = DADiskCreateFromVolumePath(nil, session, path as CFURL),
+                  Media.attachmentID(mounted) == member else {
+                end("Couldn’t verify the new mount at \(path.path). Check the drive in Finder.")
+                return
+            }
+            if enabled {
+                enrollments.enroll(target)
+                rememberMembers(of: target)
+                saveSelection(target.id)
+            } else {
+                enrollments.remove(target.id)
+                removeSelection(target.id)
+            }
+            end(enabled ? "Protected \(path.lastPathComponent) with the Finder mount option." : "Restored the standard mount for \(path.lastPathComponent).")
+        }
+        func mountFinal() {
+            guard valid() else { return }
+            let reply = Reply { dissent in
+                guard valid() else { return }
+                if let dissent {
+                    let message = self.failureDescription("Remount", dissent)
+                    let recovery = Reply { error in
+                        guard valid() else { return }
+                        end(error == nil ? "\(message) Recovered the standard mount." : "\(message) Mount the volume in Disk Utility.")
+                    }
+                    FinderMount.mount(disk, at: nil, flags: flags, hidden: false, callback: completed, context: recovery.retainedContext())
+                } else { verify() }
+            }
+            FinderMount.mount(disk, at: nil, flags: flags, hidden: enabled, callback: completed, context: reply.retainedContext())
+        }
+        func unmount(_ next: @escaping () -> Void) {
+            guard valid() else { return }
+            apfsPermit = APFSEjectPermit(root: target.id, member: member, phase: .unmount)
+            let reply = Reply { dissent in
+                guard valid() else { return }
+                self.apfsPermit = nil
+                if let dissent { end(self.failureDescription("Unmount", dissent)); return }
+                next()
+            }
+            DADiskUnmount(disk, 0, completed, reply.retainedContext())
+        }
+        queue.asyncAfter(deadline: .now() + 90) { [weak self] in
+            guard let self, self.active?.token == token else { return }
+            self.uncertain.insert(target.id)
+            self.finish("Remount timed out. Verify the mount in Disk Utility and reconnect before retrying.")
+        }
+        report("Remounting \(path.lastPathComponent)…")
+        unmount {
+            guard let staging else { mountFinal(); return }
+            let reply = Reply { dissent in
+                guard valid() else { return }
+                if let dissent {
+                    let message = self.failureDescription("Temporary mount", dissent)
+                    let recovery = Reply { error in
+                        guard valid() else { return }
+                        end(error == nil ? "\(message) Restored the previous mount." : "\(message) Mount the volume in Disk Utility.")
+                    }
+                    FinderMount.mount(disk, at: nil, flags: flags, hidden: flags & UInt32(MNT_AUTOMOUNTED) != 0,
+                                      callback: completed, context: recovery.retainedContext())
+                    return
+                }
+                // Read the flags at the distinct mount point before returning to /Volumes.
+                _ = try? staging.resourceValues(forKeys: [.volumeIsAutomountedKey])
+                unmount { mountFinal() }
+            }
+            FinderMount.mount(disk, at: staging, flags: flags | UInt32(MNT_DONTBROWSE), hidden: false, callback: completed, context: reply.retainedContext())
+        }
+    }
+}

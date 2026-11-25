@@ -50,6 +50,21 @@ private final class MenuModel: ObservableObject {
         }
     }
 
+    func changeProtection(_ target: APFSProtectionTarget, enabled: Bool) {
+        guard let volume = target.finderVolume,
+              UserDefaults.standard.bool(forKey: "hideFinderEject") || (!enabled && target.hasFinderMountFlag) else {
+            arbitrator.protect(target, enabled: enabled)
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Remount \(volume.lastPathComponent)?"
+        alert.informativeText = "Save your work and close files on \(volume.path). SSD Protect will briefly unmount this volume to change Finder’s Eject control."
+        alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
+        alert.addButton(withTitle: enabled ? "Remount and Protect" : "Remount and Unprotect").keyEquivalent = ""
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertSecondButtonReturn { arbitrator.changeFinderProtection(target, enabled: enabled) }
+    }
+
     func confirm(_ drive: Drive) {
         let alert = NSAlert()
         alert.messageText = "Eject \(drive.name)?"
@@ -230,7 +245,7 @@ private struct DriveMenu: View {
                 if let target = row.apfsTarget, suspended == nil {
                     DriveActions(name: row.name, protected: Binding(
                         get: { model.inventory.protected.contains(target.id) },
-                        set: { model.arbitrator.protect(target, enabled: $0) }
+                        set: { model.changeProtection(target, enabled: $0) }
                     ), optionDown: option.isDown, eject: { model.confirm(target, named: row.name) },
                        forceEject: { model.arbitrator.forceEject(target) })
                         .disabled(controlsUnavailable)
