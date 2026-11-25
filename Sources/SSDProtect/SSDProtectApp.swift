@@ -24,7 +24,7 @@ struct SSDProtectApp: App {
     @StateObject private var model = MenuModel()
 
     var body: some Scene {
-        MenuBarExtra("SSD Protect", systemImage: "externaldrive.badge.checkmark") {
+        MenuBarExtra {
             VStack(alignment: .leading, spacing: 12) {
                 Text("SSD Protect").font(.headline)
                 if model.inventory.drives.isEmpty {
@@ -51,6 +51,13 @@ struct SSDProtectApp: App {
             }
             .padding()
             .frame(width: 310)
+        } label: {
+            if let icon = NSImage(named: "MenuBarIcon") {
+                Image(nsImage: icon).accessibilityLabel("SSD Protect")
+            } else {
+                // A standalone SwiftPM executable has no app asset catalog.
+                Label("SSD Protect", systemImage: "externaldrive.badge.checkmark")
+            }
         }
         .menuBarExtraStyle(.window)
     }
