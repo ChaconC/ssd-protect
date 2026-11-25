@@ -2,6 +2,14 @@ import XCTest
 @testable import DriveArbitration
 
 final class InventoryTests: XCTestCase {
+    func testLockedSingleVolumeRequiresUnlockBeforeMount() {
+        var target = APFSProtectionTarget(id: 1, wholeBSD: "whole", members: ["volume": 2],
+                                          containers: [], singleVolumeBSD: "volume")
+        XCTAssertTrue(target.canRemount)
+        target.singleVolumeLocked = true
+        XCTAssertFalse(target.canRemount)
+    }
+
     func testUnmountedAPFSKeepsVolumeLabelAndHasNoMountedPaths() throws {
         let device = DiskRecord(id: "whole", partitions: [.init(id: "store")])
         let container = DiskRecord(id: "container", stores: [.init(id: "store")],

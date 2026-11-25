@@ -12,7 +12,9 @@ public struct APFSProtectionTarget: Equatable {
 
     var singleVolumeBSD: String? = nil
 
-    public var canRemount: Bool { mountedVolumes.isEmpty && singleVolumeBSD != nil }
+    public internal(set) var singleVolumeLocked = false
+
+    public var canRemount: Bool { mountedVolumes.isEmpty && singleVolumeBSD != nil && !singleVolumeLocked }
 
     func covers(_ bsd: String, observed: UInt64?) -> Bool {
         guard let observed else { return false }
@@ -71,8 +73,21 @@ public struct APFSProtectionTarget: Equatable {
         let containers = Set(disks.filter(\.isContainer).compactMap { members[$0.id] })
         let volumes = disks.filter { record in members[record.id].map(containers.contains) == true }
             .flatMap { $0.volumes ?? [] }
+        let singleVolume = volumes.count == 1 ? volumes[0].id : nil
+        var locked = false
+        if mounted.isEmpty, let singleVolume, let disk = DADiskCreateFromBSDName(nil, session, singleVolume) {
+            let entry = DADiskCopyIOMedia(disk)
+            if entry != 0 {
+                defer { IOObjectRelease(entry) }
+                var registryID: UInt64 = 0
+                guard IORegistryEntryGetRegistryEntryID(entry, &registryID) == KERN_SUCCESS,
+                      registryID == members[singleVolume] else { return nil }
+                locked = IORegistryEntryCreateCFProperty(entry, "Locked" as CFString, nil, 0)?
+                    .takeRetainedValue() as? Bool == true
+            }
+        }
         return Self(id: media.id, wholeBSD: device.id, members: members, containers: containers,
-                    mountedVolumes: mounted, singleVolumeBSD: volumes.count == 1 ? volumes[0].id : nil)
+                    mountedVolumes: mounted, singleVolumeBSD: singleVolume, singleVolumeLocked: locked)
     }
 
     // An APFS sibling can appear between inventory scans. Bind it on the serial
