@@ -3,7 +3,7 @@ import Combine
 import DriveArbitration
 import SwiftUI
 
-private final class MenuModel: ObservableObject {
+final class MenuModel: ObservableObject {
     @Published var inventory = Inventory()
     @Published var rows: [InventoryRow] = []
     @Published var scanMessage: String? = "Reading drive inventory…"
@@ -115,28 +115,23 @@ private final class MenuModel: ObservableObject {
 @main
 struct SSDProtectApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @StateObject private var model = MenuModel()
     var body: some Scene {
-        MenuBarExtra {
-            DriveMenu(model: model, requestQuit: delegate.requestQuit)
-        } label: {
-            MenuBarIcon(protectedCount: protectedCount)
-                .accessibilityLabel("SSD Protect")
-                .accessibilityValue(model.inventory.menuBarStatus)
-        }
-        .menuBarExtraStyle(.window)
-
         Settings {
-            AppSettings(restoresProtection: Binding(
-                get: { model.inventory.restoresProtection },
-                set: model.arbitrator.setRestoresProtection
-            ), sessionOnlyCount: model.inventory.sessionOnly.count, appIcons: delegate.appIcons)
+            ProtectionSettings(model: delegate.model, appIcons: delegate.appIcons)
         }
         .windowResizability(.contentSize)
     }
+}
 
-    private var protectedCount: Int {
-        model.inventory.protected.count
+private struct ProtectionSettings: View {
+    @ObservedObject var model: MenuModel
+    let appIcons: AppIconSettings
+
+    var body: some View {
+        AppSettings(restoresProtection: Binding(
+            get: { model.inventory.restoresProtection },
+            set: model.arbitrator.setRestoresProtection
+        ), sessionOnlyCount: model.inventory.sessionOnly.count, appIcons: appIcons)
     }
 }
 
@@ -157,25 +152,22 @@ extension Inventory {
     }
 }
 
-private struct DriveMenu: View {
+struct DriveMenu: View {
     @ObservedObject var model: MenuModel
     let requestQuit: (NSWindow) -> Void
+    let availableHeight: CGFloat
     @StateObject private var option = OptionKey()
     @State private var showsSimulatorImages = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        DriveMenuLayout(availableHeight: availableHeight) {
             Text("SSD Protect").font(.headline)
             if let warning = model.inventory.protectionWarning {
                 Text(warning).foregroundStyle(.secondary)
             }
-            Divider()
-            ViewThatFits(in: .vertical) {
-                driveList.fixedSize(horizontal: false, vertical: true)
-                ScrollView { driveList }.frame(height: 370)
-            }
-            .frame(maxHeight: 370)
-            .fixedSize(horizontal: false, vertical: true)
+        } rows: {
+            driveList
+        } footer: {
             if !model.inventory.message.isEmpty {
                 Text(model.inventory.message)
                     .font(.callout)
@@ -192,14 +184,6 @@ private struct DriveMenu: View {
                 Spacer()
                 QuitButton(request: requestQuit).fixedSize()
             }
-        }
-        .padding()
-        .frame(width: 340)
-        .fixedSize(horizontal: false, vertical: true)
-        .background {
-            GeometryReader { geometry in MenuWindowSizing(height: geometry.size.height) }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
         }
         .onAppear {
             option.start()

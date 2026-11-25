@@ -1,10 +1,8 @@
 import AppKit
-import SwiftUI
 
-struct MenuBarIcon: View {
-    let protectedCount: Int
-    var body: some View {
-        Image(nsImage: protectedCount > 0 ? Self.closedCradle : Self.openCradle)
+enum MenuBarIcon {
+    static func image(protectedCount: Int) -> NSImage {
+        protectedCount > 0 ? closedCradle : openCradle
     }
 
     private static let openCradle = makeImage(enclosed: false)

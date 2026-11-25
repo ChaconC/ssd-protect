@@ -5,36 +5,63 @@ import XCTest
 
 @MainActor
 final class MenuWindowAnchorTests: XCTestCase {
-    func testChangingHostedContentShrinksTheAttachedWindow() {
+    func testOpenPopoverGrowsDownwardAndScrollsOnlyAtScreenLimit() throws {
         _ = NSApplication.shared
-        let panel = NSPanel(contentRect: NSRect(x: 100, y: 200, width: 340, height: 458),
-                            styleMask: .borderless, backing: .buffered, defer: false)
-        let top = panel.frame.maxY
-        let host = NSHostingView(rootView: MenuWindowSizing(height: 458))
-        panel.contentView = host
-        for height: CGFloat in [246, 458, 246] {
-            host.rootView = MenuWindowSizing(height: height)
-            host.layoutSubtreeIfNeeded()
-            let deadline = Date().addingTimeInterval(1)
-            while panel.frame.height != height && Date() < deadline {
-                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        let screen = try XCTUnwrap(NSScreen.main)
+        let anchor = NSWindow(contentRect: NSRect(x: screen.visibleFrame.midX, y: screen.visibleFrame.maxY - 35,
+                                                  width: 40, height: 20),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        let button = NSButton(frame: NSRect(x: 0, y: 0, width: 40, height: 20))
+        anchor.contentView = button
+        anchor.orderFront(nil)
+        defer { anchor.orderOut(nil) }
+
+        let limit = min(600, screen.visibleFrame.height - 100)
+        let rows = RowHeights()
+        let host = NSHostingController(rootView: MenuFixture(rows: rows, limit: limit))
+        host.sizingOptions = [.preferredContentSize]
+        let popover = NSPopover()
+        popover.animates = false
+        popover.contentViewController = host
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        defer { popover.close() }
+
+        func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.15)) }
+        settle()
+        let window = try XCTUnwrap(host.view.window)
+        let original = window.frame
+        let expanded = min(420, limit - 100)
+        for heightRequest in [expanded, limit * 2, 100] {
+            rows.height = heightRequest
+            settle()
+            let height = host.view.bounds.height
+            XCTAssertEqual(window.frame.maxY, original.maxY, accuracy: 1)
+            if heightRequest == expanded {
+                XCTAssertEqual(window.frame.height - original.height, expanded - 100, accuracy: 1)
+            } else if heightRequest > limit {
+                XCTAssertEqual(height, limit, accuracy: 1)
+            } else {
+                XCTAssertEqual(window.frame.height, original.height, accuracy: 1)
             }
-            XCTAssertEqual(panel.frame.height, height)
-            XCTAssertEqual(panel.frame.maxY, top)
         }
     }
+}
 
-    func testExpansionAndCollapseKeepMenuTopAndHorizontalPosition() {
-        _ = NSApplication.shared
-        let panel = NSPanel(contentRect: NSRect(x: -600, y: 500, width: 340, height: 220),
-                            styleMask: .borderless, backing: .buffered, defer: true)
-        defer { panel.orderOut(nil) }
-        let top = panel.frame.maxY
-        for height in [390, 220, 390, 220] {
-            MenuWindowSizing.resize(panel, contentHeight: CGFloat(height))
-            XCTAssertEqual(panel.frame.maxY, top)
-            XCTAssertEqual(panel.frame.minX, -600)
-            XCTAssertEqual(panel.frame.height, CGFloat(height))
+private final class RowHeights: ObservableObject {
+    @Published var height: CGFloat = 100
+}
+
+private struct MenuFixture: View {
+    @ObservedObject var rows: RowHeights
+    let limit: CGFloat
+
+    var body: some View {
+        DriveMenuLayout(availableHeight: limit) {
+            Text("SSD Protect")
+        } rows: {
+            Color.clear.frame(height: rows.height)
+        } footer: {
+            Text("Quit")
         }
     }
 }
