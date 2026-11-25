@@ -40,4 +40,28 @@ final class InventoryTests: XCTestCase {
         XCTAssertEqual(rows.first { $0.id == "mixed" }?.reason, .ambiguous)
         XCTAssertEqual(rows.first { $0.id == "internal" }?.volumes, ["System"])
     }
+
+    func testOnlyImagesMountedEntirelyAtSimulatorPathsAreGroupedAsSimulators() {
+        let runtime = "/Library/Developer/CoreSimulator/Volumes/iOS_Runtime"
+        let bundle = DiskRecord(id: "bundle", mount: "/Library/Developer/CoreSimulator/Cryptex/Images/bundle/Runtime")
+        let cryptexRoot = "/private/var/run/com.apple.security.cryptexd/mnt/"
+        let cryptex = DiskRecord(id: "cryptex", mount: cryptexRoot + "com.apple.iPhoneOS.SimulatorRuntime-v24.1.example")
+        let otherCryptex = DiskRecord(id: "other", mount: cryptexRoot + "com.apple.Safari")
+        let image = DiskRecord(id: "image", partitions: [.init(id: "store")])
+        let container = DiskRecord(id: "sim", stores: [.init(id: "store")],
+                                   volumes: [.init(id: "volume", name: "Runtime", mount: runtime)])
+        let regular = DiskRecord(id: "regular", name: "iOS Simulator", mount: "/Volumes/iOS Simulator")
+        let similar = DiskRecord(id: "similar", mount: "/Library/Developer/CoreSimulatorBackup/Volumes/Sample")
+        let physical = DiskRecord(id: "physical", mount: runtime)
+        let mixed = DiskRecord(id: "mixed", partitions: [.init(id: "one", mount: runtime),
+                                                        .init(id: "two", mount: "/Volumes/Files")])
+        let images = [bundle, cryptex, otherCryptex, image, regular, similar, mixed]
+        var hardware = Dictionary(uniqueKeysWithValues: images.enumerated().map { index, disk in
+            (disk.id, Hardware(attachment: UInt64(index + 1), name: nil, kind: .image))
+        })
+        hardware[physical.id] = Hardware(attachment: 20, name: nil, kind: .external)
+        let rows = InventoryRow.group(images + [physical, container], hardware: hardware, startupWhole: nil)
+        XCTAssertEqual(Set(rows.filter { $0.kind == .simulatorImage }.map(\.id)), ["image", "bundle", "cryptex"])
+        XCTAssertEqual(Set(rows.filter { $0.kind == .image }.map(\.id)), ["regular", "similar", "mixed", "other"])
+    }
 }

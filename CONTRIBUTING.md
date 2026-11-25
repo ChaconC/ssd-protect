@@ -28,4 +28,5 @@ mount state. Redact device serials, UUIDs and personal paths from logs.
 
 Changes to `main` go through a pull request. Bring the branch up to date, pass
 `Repository checks` and resolve review conversations before merging. Use a
-merge commit or squash merge. A second maintainer's approval is optional.
+merge commit or squash merge. Wait for the repository reviewer to approve the
+changes before merging.

@@ -40,7 +40,7 @@ private final class MenuModel: ObservableObject {
                     switch result {
                     case .success(let rows):
                         self.rows = rows
-                        self.scanMessage = rows.isEmpty ? "No drives found." : nil
+                        self.scanMessage = nil
                     case .failure:
                         self.rows = []
                         self.scanMessage = "Drive inventory unavailable."
@@ -54,16 +54,44 @@ private final class MenuModel: ObservableObject {
         let alert = NSAlert()
         alert.messageText = "Eject \(drive.name)?"
         alert.informativeText = "Save your work and stop transfers on \(drive.mount.path) before ejecting this drive."
+        if confirmsEject(alert) { arbitrator.ejectConfirmed(drive) }
+    }
+
+    func confirm(_ target: APFSProtectionTarget, named name: String) {
+        let alert = NSAlert()
+        alert.messageText = "Eject the entire drive containing \(name)?"
+        let paths = target.mountedVolumes.values.map(\.path).sorted()
+        if paths.isEmpty {
+            alert.messageText = "Eject \(name)?"
+            alert.informativeText = "This will eject the entire drive. No volumes are currently mounted."
+        } else {
+            alert.informativeText = "Save your work and stop transfers. Ejecting this drive will unmount every volume listed below."
+            let list = NSHostingView(rootView: ScrollView {
+                Text(verbatim: paths.joined(separator: "\n"))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .frame(maxHeight: 160)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: 280))
+            list.setFrameSize(list.fittingSize)
+            alert.accessoryView = list
+        }
+        if confirmsEject(alert) { arbitrator.ejectConfirmed(target) }
+    }
+
+    private func confirmsEject(_ alert: NSAlert) -> Bool {
         alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
         alert.addButton(withTitle: "Eject").keyEquivalent = ""
         NSApp.activate(ignoringOtherApps: true)
-        if alert.runModal() == .alertSecondButtonReturn { arbitrator.ejectConfirmed(drive) }
+        return alert.runModal() == .alertSecondButtonReturn
     }
 }
 
 @main
 struct SSDProtectApp: App {
     @StateObject private var model = MenuModel()
+    @State private var showsSimulatorImages = false
 
     var body: some Scene {
         MenuBarExtra {
@@ -73,6 +101,8 @@ struct SSDProtectApp: App {
                 Divider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
+                        let rows = inventoryRows
+                        let simulators = rows.filter { $0.kind == .simulatorImage }
                         ForEach(model.inventory.drives) { drive in
                             VStack(alignment: .leading) {
                                 Toggle(drive.name, isOn: Binding(
@@ -84,22 +114,26 @@ struct SSDProtectApp: App {
                                     Spacer()
                                     Button("Eject…") { model.confirm(drive) }
                                 }
-                            }.disabled(model.inventory.busy)
+                            }.disabled(controlsUnavailable)
                             Divider()
                         }
-                        ForEach(readOnlyRows) { row in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(row.name).fontWeight(.medium)
-                                Text(details(row)).font(.caption).foregroundStyle(.secondary)
-                                if row.volumes.count > 1 {
-                                    Text(row.volumes.joined(separator: ", ")).font(.caption)
-                                }
-                                Text(row.reason.rawValue).font(.callout)
-                            }
+                        ForEach(rows.filter { $0.kind != .simulatorImage }) { row in
+                            inventoryRow(row)
                             Divider()
+                        }
+                        if !simulators.isEmpty {
+                            DisclosureGroup("Simulator disk images (\(simulators.count))", isExpanded: $showsSimulatorImages) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(simulators) { row in inventoryRow(row) }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.top, 4)
+                            }
                         }
                         if let message = model.scanMessage {
                             Text(message).foregroundStyle(.secondary)
+                        } else if rows.isEmpty && model.inventory.drives.isEmpty {
+                            Text("No drives to show.").foregroundStyle(.secondary)
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -126,16 +160,62 @@ struct SSDProtectApp: App {
     private var protectionStatus: String {
         guard let available = model.inventory.available else { return "Starting protection…" }
         guard available else { return "Protection unavailable" }
-        return protectedCount == 0 ? "No drives protected" : "Protecting \(protectedCount) \(protectedCount == 1 ? "drive" : "drives")"
+        let suspended = model.inventory.suspendedAPFS.count
+        if protectedCount == 0 {
+            return suspended == 0 ? "No drives protected" : "Protection suspended for \(suspended) \(suspended == 1 ? "drive" : "drives")"
+        }
+        let active = "Protecting \(protectedCount) \(protectedCount == 1 ? "drive" : "drives")"
+        return suspended == 0 ? active : "\(active) · \(suspended) suspended"
     }
 
-    private var readOnlyRows: [InventoryRow] {
+    private var controlsUnavailable: Bool { model.inventory.busy || model.inventory.available != true }
+
+    private var inventoryRows: [InventoryRow] {
         let eligible = Set(model.inventory.drives.map(\.id))
-        return model.rows.filter { row in !(row.attachment.map(eligible.contains) ?? false) }
+        return model.rows.filter { row in
+            row.reason != .startup && !(row.attachment.map(eligible.contains) ?? false)
+        }
+    }
+
+    private func inventoryRow(_ row: InventoryRow) -> some View {
+        let suspended = row.attachment.flatMap { model.inventory.suspendedAPFS.contains($0) ? $0 : nil }
+        return VStack(alignment: .leading, spacing: 3) {
+            if let target = row.apfsTarget, suspended == nil {
+                Toggle(row.name, isOn: Binding(
+                    get: { model.inventory.protected.contains(target.id) },
+                    set: { model.arbitrator.protect(target, enabled: $0) }
+                ))
+                .toggleStyle(.switch)
+                .accessibilityLabel("Protect \(row.name)")
+                .disabled(controlsUnavailable)
+            } else {
+                Text(row.name).fontWeight(.medium)
+            }
+            HStack {
+                Text(details(row)).font(.caption).foregroundStyle(.secondary)
+                if let target = row.apfsTarget, suspended == nil {
+                    Spacer()
+                    Button("Eject…") { model.confirm(target, named: row.name) }
+                        .accessibilityLabel("Eject \(row.name)…")
+                        .disabled(controlsUnavailable)
+                }
+            }
+            if row.volumes.count > 1 {
+                Text(row.volumes.joined(separator: ", ")).font(.caption)
+            }
+            if let suspended {
+                Text("Protection suspended until the drive can be verified.").font(.callout)
+                Button("Turn Off Protection") { model.arbitrator.disableAPFSProtection(for: suspended) }
+                    .disabled(controlsUnavailable)
+            } else if row.apfsTarget == nil {
+                Text(row.reason.rawValue).font(.callout)
+            }
+        }
     }
 
     private func details(_ row: InventoryRow) -> String {
-        guard let bytes = row.capacity else { return row.kind.rawValue }
-        return row.kind.rawValue + " · " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .decimal)
+        let kind = row.apfsTarget == nil ? row.kind.rawValue : "External APFS"
+        guard let bytes = row.capacity else { return kind }
+        return kind + " · " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .decimal)
     }
 }
