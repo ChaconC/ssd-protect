@@ -66,7 +66,7 @@ struct SSDProtectApp: App {
     @StateObject private var model = MenuModel()
 
     var body: some Scene {
-        MenuBarExtra("SSD Protect", systemImage: protectedCount > 0 ? "externaldrive.badge.checkmark" : "externaldrive") {
+        MenuBarExtra {
             VStack(alignment: .leading, spacing: 10) {
                 Text("SSD Protect").font(.headline)
                 Text(protectionStatus).foregroundStyle(.secondary)
@@ -111,6 +111,10 @@ struct SSDProtectApp: App {
             .padding()
             .frame(width: 340)
             .onAppear { model.refresh() }
+        } label: {
+            MenuBarIcon(protectedCount: protectedCount)
+                .accessibilityLabel("SSD Protect")
+                .accessibilityValue(protectionStatus)
         }
         .menuBarExtraStyle(.window)
     }

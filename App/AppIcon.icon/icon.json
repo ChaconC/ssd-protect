@@ -1,0 +1,17 @@
+{
+  "fill-specializations": [
+    { "value": { "solid": "srgb:0.980,0.951,0.916,1.000" } },
+    { "appearance": "dark", "value": { "automatic-gradient": "srgb:0.150,0.150,0.154,1.000" } }
+  ],
+  "groups": [
+    {
+      "layers": [
+        { "name": "Drive and cradle", "image-name": "Drive.png", "glass": false }
+      ],
+      "shadow": { "kind": "neutral", "opacity": 0.18 },
+      "specular": false,
+      "translucency": { "enabled": false, "value": 0 }
+    }
+  ],
+  "supported-platforms": { "squares": ["macOS"] }
+}
