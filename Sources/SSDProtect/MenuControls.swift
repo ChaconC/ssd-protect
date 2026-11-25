@@ -199,6 +199,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         popover.behavior = .transient
         popover.animates = false
+        DispatchQueue.main.async {
+            self.model.finderRegistration.offerRecoveryAtLaunch { title, detail in
+                let alert = NSAlert()
+                alert.messageText = title
+                alert.informativeText = detail
+                alert.addButton(withTitle: "Continue")
+                alert.addButton(withTitle: "Later")
+                NSApp.activate(ignoringOtherApps: true)
+                return alert.runModal() == .alertFirstButtonReturn
+            }
+        }
     }
 
     @objc private func toggleMenu(_ sender: NSStatusBarButton) {

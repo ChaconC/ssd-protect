@@ -45,6 +45,26 @@ final class FinderRegistration: ObservableObject {
         }
     }
 
+    func requestApproval() {
+        refresh()
+        if recovery != .approve { setRequested(true) }
+        if recovery == .approve { SMAppService.openSystemSettingsLoginItems() }
+    }
+
+    func offerRecoveryAtLaunch(confirm: (String, String) -> Bool) {
+        refresh()
+        switch recovery {
+        case .none: return
+        case .registerBuild:
+            guard confirm("Register the Finder helper for this build?",
+                          "SSD Protect needs to register this copy before it can update Finder’s Eject controls for encrypted volumes.") else { return }
+        case .approve:
+            guard confirm("Approve the Finder helper?",
+                          "Allow SSD Protect under Login Items & Extensions to resume Finder updates for encrypted volumes.") else { return }
+        }
+        requestApproval()
+    }
+
     func setRequested(_ enabled: Bool) {
         refresh()
         errorMessage = nil
@@ -81,8 +101,7 @@ struct FinderApprovalAction: View {
         switch registration.recovery {
         case .registerBuild:
             Button("Register Finder Helper for This Build…") {
-                registration.setRequested(true)
-                if registration.recovery == .approve { SMAppService.openSystemSettingsLoginItems() }
+                registration.requestApproval()
             }
         case .approve:
             Button("Approve Finder Helper in System Settings…") { SMAppService.openSystemSettingsLoginItems() }

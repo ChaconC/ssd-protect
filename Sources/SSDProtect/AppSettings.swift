@@ -69,7 +69,7 @@ struct GeneralSettings: View {
                 Toggle("Hide Finder Eject on encrypted APFS", isOn: Binding(
                     get: { finderHelper.requested },
                     set: { enabled in
-                        if enabled { finderHelper.setRequested(true) }
+                        if enabled { finderHelper.requestApproval() }
                         else { model.disableFinderHelper(finderHelper) }
                     }
                 ))

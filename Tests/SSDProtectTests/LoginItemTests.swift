@@ -47,6 +47,10 @@ extension LoginItemTests {
             })
         }
         let first = model("first")
+        first.offerRecoveryAtLaunch { _, _ in
+            XCTFail("A fresh install has no helper permission to recover.")
+            return false
+        }
         XCTAssertFalse(first.requested)
         first.setRequested(true)
         XCTAssertEqual(first.recovery, .approve)
@@ -56,6 +60,8 @@ extension LoginItemTests {
         let updated = model("second")
         XCTAssertEqual(updated.recovery, .registerBuild)
         XCTAssertFalse(updated.ready)
+        XCTAssertEqual(calls, [true])
+        updated.offerRecoveryAtLaunch { _, _ in false }
         XCTAssertEqual(calls, [true])
         updated.setRequested(true)
         XCTAssertEqual(updated.recovery, .approve)

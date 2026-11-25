@@ -45,8 +45,8 @@ Open **Settings → General** to configure SSD Protect:
   encrypted APFS volume. Install the app in Applications, enable the setting,
   and approve SSD Protect under System Settings → General → Login Items &
   Extensions. SSD Protect remembers this setting across app updates. If a
-  replacement build needs a new registration, choose **Register Finder Helper
-  for This Build…** in the menu, then approve it in System Settings if asked.
+  replacement build needs registration or approval, SSD Protect prompts at launch.
+  Choose **Continue** to recover it, or **Later** to handle it from the menu.
   After a mount flag change, choose **Relaunch Finder…** to refresh Locations
   and Computer.
   Open files on the drive stay accessible. Turning off the setting offers to clear the flag on the listed
