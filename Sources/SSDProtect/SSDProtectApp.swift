@@ -279,9 +279,13 @@ struct DriveMenu: View {
                         }
                             .accessibilityLabel(target.singleVolumeLocked ? "Unlock \(row.name)" : "Mount \(row.name)")
                             .disabled(controlsUnavailable)
-                    } else {
-                        Button("Eject…") { model.confirm(target, named: row.name) }.disabled(controlsUnavailable)
                     }
+                    Button("Eject…") { model.confirm(target, named: row.name) }.disabled(controlsUnavailable)
+                } else if let target = row.apfsTarget, let staging = model.inventory.finderRecoveryPaths[target.id],
+                          target.mountedVolumes.values.contains(staging) {
+                    Button("Retry Remount") { model.arbitrator.retryFinderRemount(target) }
+                        .disabled(controlsUnavailable)
+                        .help("Restore the volume mounted at \(staging.path) after closing its open files.")
                 } else if let target = row.apfsTarget, suspended == nil {
                     DriveActions(name: row.name, protected: Binding(
                         get: { model.inventory.protected.contains(target.id) },

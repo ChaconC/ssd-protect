@@ -19,6 +19,7 @@ public struct Inventory {
     public var available: Bool?
     public var restoresProtection = false
     public var sessionOnly: Set<UInt64> = []
+    public var finderRecoveryPaths: [UInt64: URL] = [:]
     public var busy = false
     public var message = ""
     public init() {}
@@ -115,6 +116,7 @@ public final class Arbitrator {
     private var policy = Protection()
     private var apfsPermit: APFSEjectPermit?
     private var active: (token: UUID, drive: UInt64)?
+    private var finderRecovery: [UInt64: FinderStagingMount] = [:]
     private var uncertain: Set<UInt64> = []
     private var message = ""
     private var started = false
@@ -409,6 +411,12 @@ public final class Arbitrator {
         topologyDidChange()
         guard let session, let name = DADiskGetBSDName(disk) else { return }
         let bsd = String(cString: name)
+        if let departing = Media.attachmentID(disk), let staging = finderRecovery[departing],
+           staging.original.wholeBSD == bsd {
+            finderRecovery.removeValue(forKey: departing)
+            verifier.async { _ = rmdir(staging.path.path) }
+            publish()
+        }
         guard byBSD[bsd] != nil || apfsAttachments[bsd] != nil else { return }
         let live = DADiskCreateFromBSDName(nil, session, bsd).flatMap(Media.attachmentID)
         let departing = Media.attachmentID(disk)
@@ -488,13 +496,12 @@ public final class Arbitrator {
                     self.advanceAPFSEject(expected: expected, name: name, unmountOptions: unmountOptions, token: token)
                     return
                 }
-                guard row?.apfsTarget == expected else {
+                guard let bsd = expected.nextEjectBSD(verifiedBy: row?.apfsTarget) else {
                     self.finish("Drive or mount state changed. Eject stopped.")
                     return
                 }
                 let displayName = name ?? row?.name ?? "APFS drive"
-                let nextVolume = expected.mountedVolumes.keys.sorted().first
-                let bsd = nextVolume ?? expected.wholeBSD
+                let mount = expected.mountedVolumes[bsd]
                 guard let member = expected.members[bsd], let session = self.session,
                       let disk = DADiskCreateFromBSDName(nil, session, bsd), let media = Media(disk),
                       media.id == member,
@@ -502,22 +509,22 @@ public final class Arbitrator {
                     self.finish("Attachment changed. Eject stopped.")
                     return
                 }
-                let phase: Phase = nextVolume == nil ? .eject : .unmount
+                let phase: Phase = mount == nil ? .eject : .unmount
                 self.apfsPermit = APFSEjectPermit(root: expected.id, member: member, phase: phase)
                 let reply = Reply { [weak self] dissent in
                     guard let self, self.active?.token == token else { return }
                     self.apfsPermit = nil
                     if let dissent {
                         self.reconcileAPFSFailure(expected, phase: phase, dissent: dissent, token: token)
-                    } else if let nextVolume {
+                    } else if mount != nil {
                         var remaining = expected
-                        remaining.mountedVolumes.removeValue(forKey: nextVolume)
+                        remaining.mountedVolumes.removeValue(forKey: bsd)
                         self.advanceAPFSEject(expected: remaining, name: displayName, unmountOptions: unmountOptions, token: token)
                     } else {
                         self.checkEjectResult(expected, name: displayName, token: token)
                     }
                 }
-                if let mount = expected.mountedVolumes[bsd] {
+                if let mount {
                     self.report("Unmounting \(mount.lastPathComponent)…")
                     DADiskUnmount(disk, unmountOptions, completed, reply.retainedContext())
                 } else {
@@ -560,16 +567,20 @@ public final class Arbitrator {
     }
 
     public func remount(_ target: APFSProtectionTarget, named name: String) {
+        remount(target, named: name, timeout: .seconds(60))
+    }
+
+    func remount(_ target: APFSProtectionTarget, named name: String, timeout: DispatchTimeInterval) {
         queue.async { [self] in
             guard active == nil, target.mountedVolumes.isEmpty, let bsd = target.singleVolumeBSD else { return }
             let token = UUID()
             active = (token, target.id)
             report("Mounting \(name)…")
-            if !target.singleVolumeLocked {
-                queue.asyncAfter(deadline: .now() + 60) { [self] in
-                    if active?.token == token { finish("Mount timed out. Check the drive in Disk Utility.") }
-                }
+            let watchdog = DispatchWorkItem { [self] in
+                guard active?.token == token else { return }
+                finish("Mount timed out. Check the drive in Disk Utility.")
             }
+            queue.asyncAfter(deadline: .now() + timeout, execute: watchdog)
             verifier.async {
                 let rows = try? self.readForRecheck(false)
                 let verified = rows?.contains { $0.kind == .external && $0.apfsTarget == target } == true
@@ -596,7 +607,12 @@ public final class Arbitrator {
                                        ? "Mounted \(name)." : "\(name) is unmounted.")
                             }
                         }
-                        if !requested { finish("Select \(name) in Disk Utility and click Mount.") }
+                        if requested {
+                            // The system prompt can wait indefinitely for user input.
+                            watchdog.cancel()
+                        } else {
+                            finish("Select \(name) in Disk Utility and click Mount.")
+                        }
                         return
                     }
                     let reply = Reply { [self] dissent in
@@ -716,6 +732,7 @@ public final class Arbitrator {
         var snapshot = Inventory(drives: Array(drives.values).sorted { $0.name < $1.name },
                               protected: policy.enrolled.union(apfsRules.keys), suspendedAPFS: enrollments.suspended,
                               available: session != nil, busy: active != nil, message: message)
+        snapshot.finderRecoveryPaths = finderRecovery.mapValues(\.path)
         snapshot.restoresProtection = restoration.enabled
         snapshot.sessionOnly = snapshot.protected.union(enrollments.suspended)
             .subtracting(restoration.bindings.keys).subtracting(pendingSaves)
@@ -738,25 +755,60 @@ private extension Inventory {
 extension Arbitrator {
     /// Called after the user confirms the exact mount snapshot shown in the alert.
     public func changeFinderProtection(_ target: APFSProtectionTarget, enabled: Bool) {
+        beginFinderChange(target, enabled: enabled, retrying: false)
+    }
+
+    public func retryFinderRemount(_ target: APFSProtectionTarget) {
+        beginFinderChange(target, enabled: false, retrying: true)
+    }
+
+    func beginFinderChange(_ target: APFSProtectionTarget, enabled: Bool, retrying: Bool,
+                           timeout: DispatchTimeInterval = .seconds(90)) {
         queue.async { [self] in
+            let recovery = retrying ? finderRecovery[target.id] : nil
             guard active == nil, !uncertain.contains(target.id),
-                  let path = target.finderVolume, let bsd = target.mountedVolumes.keys.first,
-                  let member = target.members[bsd] else { report("Reopen the drive menu and verify the mounted volume."); return }
+                  retrying ? recovery?.matches(target) == true : target.finderVolume != nil,
+                  let (bsd, path) = target.mountedVolumes.first, let member = target.members[bsd] else {
+                report("Reopen the drive menu and verify the mounted volume.")
+                return
+            }
             let token = UUID()
             active = (token, target.id)
+            var preflighting = true
+            queue.asyncAfter(deadline: .now() + timeout) {
+                guard self.active?.token == token else { return }
+                if preflighting {
+                    self.finish("Volume check timed out. Reopen the drive menu and retry.")
+                    return
+                }
+                self.uncertain.insert(target.id)
+                self.finish("Remount timed out. Verify the mount in Disk Utility and reconnect before retrying.")
+            }
             pendingEnrollment.removeValue(forKey: target.id)
             report("Checking \(path.lastPathComponent)…")
             verifier.async {
-                let rows = try? DriveInventory.read()
+                let rows = try? self.readForRecheck(false)
                 let verified = rows?.contains { $0.kind == .external && $0.apfsTarget == target } == true
+                let flags = verified ? FinderMount.flags(at: path) : nil
+                let prepare = !enabled && !retrying
+                let staging: FinderStagingMount?
+                if prepare, let flags, FinderMount.supports(flags: flags) {
+                    staging = try? FinderStagingMount.prepare(original: target, bsd: bsd, member: member, flags: flags)
+                } else {
+                    staging = recovery
+                }
                 self.queue.async {
-                    guard self.active?.token == token else { return }
-                    guard verified, let flags = FinderMount.flags(at: path),
-                          let session = self.session, let disk = DADiskCreateFromBSDName(nil, session, bsd),
-                          let media = Media(disk), media.id == member,
+                    func discardPreparedDirectory() {
+                        if prepare, let staging { self.verifier.async { _ = rmdir(staging.path.path) } }
+                    }
+                    guard self.active?.token == token else { discardPreparedDirectory(); return }
+                    guard let flags, let session = self.session,
+                          let root = DADiskCreateFromBSDName(nil, session, target.wholeBSD), Media.attachmentID(root) == target.id,
+                          let disk = DADiskCreateFromBSDName(nil, session, bsd), let media = Media(disk), media.id == member,
                           media.description[kDADiskDescriptionVolumePathKey] as? URL == path,
                           media.description[kDADiskDescriptionMediaEncryptedKey] as? Bool == false,
                           media.description[kDADiskDescriptionVolumeKindKey] as? String == "apfs" else {
+                        discardPreparedDirectory()
                         self.finish("Drive or mount changed. Reopen the drive menu.")
                         return
                     }
@@ -764,58 +816,63 @@ extension Arbitrator {
                         self.finish("This volume uses mount options that SSD Protect cannot preserve.")
                         return
                     }
-                    self.remountForFinder(target, disk: disk, path: path, member: member,
-                                          flags: flags, enabled: enabled, token: token)
+                    guard !prepare || staging != nil else {
+                        self.finish("Couldn’t prepare the temporary mount point.")
+                        return
+                    }
+                    preflighting = false
+                    self.remountForFinder(recovery?.original ?? target, disk: disk, bsd: bsd, member: member,
+                                          flags: recovery?.originalFlags ?? flags, enabled: enabled,
+                                          token: token, staging: staging, retrying: retrying)
                 }
             }
         }
     }
 
-    private func remountForFinder(_ target: APFSProtectionTarget, disk: DADisk, path: URL, member: UInt64,
-                                  flags: UInt32, enabled: Bool, token: UUID) {
-        var staging: URL?
-        if !enabled {
-            // Use one hidden mount-point name per attachment. Finder can retain
-            // obsolete display entries for every distinct path it has observed.
-            let directory = FileManager.default.temporaryDirectory
-                .appendingPathComponent(".ssd-protect-remount-\(member)", isDirectory: true)
-            do {
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
-                                                        attributes: [.posixPermissions: 0o700])
-                staging = directory.resolvingSymlinksInPath()
-            } catch { finish("Couldn’t prepare the temporary mount point."); return }
-        }
+    private func remountForFinder(_ target: APFSProtectionTarget, disk: DADisk, bsd: String, member: UInt64,
+                                  flags: UInt32, enabled: Bool, token: UUID, staging: FinderStagingMount?, retrying: Bool) {
+        guard let path = target.finderVolume else { finish("The original mount path is unavailable."); return }
         func end(_ text: String) {
-            if let staging { _ = rmdir(staging.path) }
+            if let staging, finderRecovery[target.id] == nil { verifier.async { _ = rmdir(staging.path.path) } }
             finish(text)
         }
         func valid() -> Bool {
             guard active?.token == token, let session,
                   let root = DADiskCreateFromBSDName(nil, session, target.wholeBSD),
-                  Media.attachmentID(root) == target.id, Media.attachmentID(disk) == member else {
+                  Media.attachmentID(root) == target.id,
+                  let live = DADiskCreateFromBSDName(nil, session, bsd), Media.attachmentID(live) == member else {
                 if active?.token == token { end("Drive disconnected during remount.") }
                 return false
             }
             return true
         }
+        func mountedPath() -> URL? {
+            guard let session, let fresh = DADiskCreateFromBSDName(nil, session, bsd).flatMap(Media.init),
+                  fresh.id == member else { return nil }
+            return fresh.description[kDADiskDescriptionVolumePathKey] as? URL
+        }
         func verify() {
             guard valid() else { return }
-            guard let current = FinderMount.flags(at: path),
-                  (current & UInt32(MNT_AUTOMOUNTED) != 0) == enabled,
-                  let session, let mounted = DADiskCreateFromVolumePath(nil, session, path as CFURL),
-                  Media.attachmentID(mounted) == member else {
-                end("Couldn’t verify the new mount at \(path.path). Check the drive in Finder.")
-                return
+            verifier.async {
+                let current = FinderMount.flags(at: path)
+                self.queue.async {
+                    guard valid() else { return }
+                    guard let current, (current & UInt32(MNT_AUTOMOUNTED) != 0) == enabled,
+                          mountedPath() == path else {
+                        end("Couldn’t verify the new mount at \(path.path). Check the drive in Finder.")
+                        return
+                    }
+                    if enabled {
+                        self.enrollments.enroll(target)
+                        self.rememberMembers(of: target)
+                        self.saveSelection(target.id)
+                    } else {
+                        self.enrollments.remove(target.id)
+                        self.removeSelection(target.id)
+                    }
+                    end(enabled ? "Protected \(path.lastPathComponent) with the Finder mount option." : "Restored the standard mount for \(path.lastPathComponent).")
+                }
             }
-            if enabled {
-                enrollments.enroll(target)
-                rememberMembers(of: target)
-                saveSelection(target.id)
-            } else {
-                enrollments.remove(target.id)
-                removeSelection(target.id)
-            }
-            end(enabled ? "Protected \(path.lastPathComponent) with the Finder mount option." : "Restored the standard mount for \(path.lastPathComponent).")
         }
         func mountFinal() {
             guard valid() else { return }
@@ -832,24 +889,35 @@ extension Arbitrator {
             }
             FinderMount.mount(disk, at: nil, flags: flags, hidden: enabled, callback: completed, context: reply.retainedContext())
         }
-        func unmount(_ next: @escaping () -> Void) {
+        func unmount(at expected: URL, options: DADiskUnmountOptions, reply: @escaping (DADissenter?) -> Void) {
             guard valid() else { return }
+            guard mountedPath() == expected else {
+                end("Mount state changed. Reopen the drive menu.")
+                return
+            }
             apfsPermit = APFSEjectPermit(root: target.id, member: member, phase: .unmount)
-            let reply = Reply { dissent in
+            let callback = Reply { dissent in
                 guard valid() else { return }
                 self.apfsPermit = nil
-                if let dissent { end(self.failureDescription("Unmount", dissent)); return }
-                next()
+                reply(dissent)
             }
-            DADiskUnmount(disk, 0, completed, reply.retainedContext())
+            DADiskUnmount(disk, options, completed, callback.retainedContext())
         }
-        queue.asyncAfter(deadline: .now() + 90) { [weak self] in
-            guard let self, self.active?.token == token else { return }
-            self.uncertain.insert(target.id)
-            self.finish("Remount timed out. Verify the mount in Disk Utility and reconnect before retrying.")
+        func leaveStaging(_ stage: FinderStagingMount) {
+            stage.leave(unmount: { options, reply in
+                unmount(at: stage.path, options: options, reply: reply)
+            }, stillMounted: { dissent, entry in
+                self.finderRecovery[target.id] = entry
+                self.finish("\(self.failureDescription("Unmount", dissent)) The volume is mounted at \(entry.path.path). Close open files and choose Retry Remount.")
+            }, unmounted: {
+                self.finderRecovery.removeValue(forKey: target.id)
+                mountFinal()
+            })
         }
         report("Remounting \(path.lastPathComponent)…")
-        unmount {
+        if retrying, let staging { leaveStaging(staging); return }
+        unmount(at: path, options: 0) { dissent in
+            if let dissent { end(self.failureDescription("Unmount", dissent)); return }
             guard let staging else { mountFinal(); return }
             let reply = Reply { dissent in
                 guard valid() else { return }
@@ -863,11 +931,17 @@ extension Arbitrator {
                                       callback: completed, context: recovery.retainedContext())
                     return
                 }
+                self.finderRecovery[target.id] = staging
                 // Read the flags at the distinct mount point before returning to /Volumes.
-                _ = try? staging.resourceValues(forKeys: [.volumeIsAutomountedKey])
-                unmount { mountFinal() }
+                self.verifier.async {
+                    _ = try? staging.path.resourceValues(forKeys: [.volumeIsAutomountedKey])
+                    self.queue.async {
+                        guard valid() else { return }
+                        leaveStaging(staging)
+                    }
+                }
             }
-            FinderMount.mount(disk, at: staging, flags: flags | UInt32(MNT_DONTBROWSE), hidden: false, callback: completed, context: reply.retainedContext())
+            FinderMount.mount(disk, at: staging.path, flags: flags | UInt32(MNT_DONTBROWSE), hidden: false, callback: completed, context: reply.retainedContext())
         }
     }
 }

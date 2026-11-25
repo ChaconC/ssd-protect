@@ -53,3 +53,33 @@ extension APFSProtectionTarget {
         return flags & UInt32(MNT_AUTOMOUNTED) != 0
     }
 }
+
+/// The original flags and visible path survive a busy reply at the temporary mount.
+struct FinderStagingMount {
+    let original: APFSProtectionTarget
+    let bsd: String
+    let path: URL
+    let originalFlags: UInt32
+
+    func matches(_ current: APFSProtectionTarget) -> Bool {
+        var expected = original
+        expected.mountedVolumes[bsd] = path
+        return current == expected
+    }
+
+    static func prepare(original: APFSProtectionTarget, bsd: String, member: UInt64, flags: UInt32) throws -> Self {
+        // Finder can retain a display entry for every distinct mount point it has seen.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(".ssd-protect-remount-\(member)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        return Self(original: original, bsd: bsd, path: directory.resolvingSymlinksInPath(), originalFlags: flags)
+    }
+
+    func leave(unmount: (DADiskUnmountOptions, @escaping (DADissenter?) -> Void) -> Void,
+               stillMounted: @escaping (DADissenter, Self) -> Void, unmounted: @escaping () -> Void) {
+        unmount(0) { dissent in
+            if let dissent { stillMounted(dissent, self) } else { unmounted() }
+        }
+    }
+}

@@ -17,6 +17,13 @@ public struct APFSProtectionTarget: Equatable {
 
     public var canRemount: Bool { mountedVolumes.isEmpty && singleVolumeBSD != nil && !singleVolumeLocked }
 
+    func nextEjectBSD(verifiedBy current: Self?) -> String? {
+        guard let current, id == current.id, wholeBSD == current.wholeBSD,
+              members == current.members, containers == current.containers,
+              mountedVolumes == current.mountedVolumes else { return nil }
+        return mountedVolumes.keys.sorted().first ?? wholeBSD
+    }
+
     func covers(_ bsd: String, observed: UInt64?) -> Bool {
         guard let observed else { return false }
         return members[bsd] == observed

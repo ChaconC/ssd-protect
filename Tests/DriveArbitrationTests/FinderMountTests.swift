@@ -1,3 +1,4 @@
+import DiskArbitration
 import XCTest
 @testable import DriveArbitration
 
@@ -11,6 +12,65 @@ final class FinderMountTests: XCTestCase {
         XCTAssertNil(target.finderVolume)
         target.unencryptedMountedMembers = ["selected"]
         XCTAssertEqual(target.finderVolume, path)
+    }
+
+    func testStalledFinderPreflightReleasesControlsAndIgnoresLateResult() {
+        let started = expectation(description: "Inventory scan started")
+        let expired = expectation(description: "Controls released")
+        let lateUpdate = expectation(description: "Late result changed the operation")
+        lateUpdate.isInverted = true
+        let resume = DispatchSemaphore(value: 0)
+        let arbitrator = Arbitrator(testImageID: nil, readForRecheck: { _ in
+            started.fulfill()
+            resume.wait()
+            return []
+        }, update: { state in
+            if !state.busy {
+                if state.message.contains("timed out") { expired.fulfill() }
+                else { lateUpdate.fulfill() }
+            }
+        })
+        let target = APFSProtectionTarget(id: 1, wholeBSD: "whole", members: ["volume": 2], containers: [],
+                                          mountedVolumes: ["volume": URL(fileURLWithPath: "/Volumes/Test")],
+                                          unencryptedMountedMembers: ["volume"])
+        arbitrator.beginFinderChange(target, enabled: true, retrying: false, timeout: .milliseconds(50))
+        wait(for: [started, expired], timeout: 2)
+        resume.signal()
+        wait(for: [lateUpdate], timeout: 0.1)
+    }
+
+    func testBusyStagingUnmountKeepsPathAndOriginalFlagsForNormalRetry() throws {
+        let visible = URL(fileURLWithPath: "/Volumes/Test")
+        let temporary = URL(fileURLWithPath: "/private/tmp/.test")
+        let original = APFSProtectionTarget(id: 1, wholeBSD: "whole", members: ["volume": 2],
+                                           containers: [], mountedVolumes: ["volume": visible],
+                                           unencryptedMountedMembers: ["volume"])
+        let staged = FinderStagingMount(original: original, bsd: "volume", path: temporary,
+                                       originalFlags: UInt32(MNT_NOSUID | MNT_AUTOMOUNTED))
+        var mounted = original
+        mounted.mountedVolumes["volume"] = temporary
+        var recovery: FinderStagingMount?
+        var flagsForVisibleMount: UInt32?
+        func simulate(_ dissent: DADissenter?) {
+            staged.leave(unmount: { options, reply in
+                XCTAssertEqual(options, 0)
+                reply(dissent)
+            }, stillMounted: { _, entry in
+                recovery = entry
+            }, unmounted: {
+                recovery = nil
+                flagsForVisibleMount = staged.originalFlags
+            })
+        }
+        simulate(try XCTUnwrap(DADissenterCreate(nil, Int32(truncatingIfNeeded: kDAReturnBusy), nil)))
+        XCTAssertNil(flagsForVisibleMount)
+        XCTAssertEqual(recovery?.path, temporary)
+        XCTAssertTrue(recovery?.matches(mounted) == true)
+        mounted.members["volume"] = 3
+        XCTAssertFalse(recovery?.matches(mounted) == true)
+        simulate(nil)
+        XCTAssertNil(recovery)
+        XCTAssertEqual(FinderMount.options(flags: try XCTUnwrap(flagsForVisibleMount), hidden: false), ["nosuid"])
     }
 
     func testUnsupportedMountSemanticsAreRejectedBeforeUnmount() {
