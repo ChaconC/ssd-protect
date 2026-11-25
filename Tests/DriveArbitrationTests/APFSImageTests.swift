@@ -15,8 +15,16 @@ final class APFSImageTests: XCTestCase {
     // Supply the exact mount path of one volume on a disposable, two-volume GPT/APFS image.
     // The test ends by ejecting the image. Reattach it before running the test again.
     func testProtectionVetoesSiblingsAndSurvivesBusyConfirmedEject() throws {
-        guard let path = ProcessInfo.processInfo.environment["SSD_PROTECT_TEST_APFS_IMAGE"] else {
-            throw XCTSkip("Set SSD_PROTECT_TEST_APFS_IMAGE to a disposable APFS image volume's mount path.")
+        try exerciseImage(variable: "SSD_PROTECT_TEST_APFS_IMAGE", forceRetry: false)
+    }
+
+    func testForceEjectRejectsStaleTopologyThenEjectsBusyImage() throws {
+        try exerciseImage(variable: "SSD_PROTECT_TEST_FORCE_APFS_IMAGE", forceRetry: true)
+    }
+
+    private func exerciseImage(variable: String, forceRetry: Bool) throws {
+        guard let path = ProcessInfo.processInfo.environment[variable] else {
+            throw XCTSkip("Set \(variable) to a disposable APFS image volume's mount path.")
         }
         let session = try XCTUnwrap(DASessionCreate(nil))
         DASessionSetDispatchQueue(session, .main)
@@ -203,9 +211,34 @@ final class APFSImageTests: XCTestCase {
               remainingMounts[busyBSD] == busyPath else {
             return XCTFail("The retry confirmation did not describe the current mounted volumes.")
         }
-        service.ejectConfirmed(retry)
+        var secondHolder: Process?
+        defer {
+            if let secondHolder, secondHolder.isRunning {
+                secondHolder.terminate()
+                secondHolder.waitUntilExit()
+            }
+        }
+        if forceRetry {
+            // Keep the volume busy through the verified force request.
+            let busyHolder = Process()
+            busyHolder.executableURL = URL(fileURLWithPath: "/bin/sleep")
+            busyHolder.arguments = ["120"]
+            busyHolder.currentDirectoryURL = URL(fileURLWithPath: busyPath, isDirectory: true)
+            try busyHolder.run()
+            secondHolder = busyHolder
+            XCTAssertNotEqual(confirmed, retry)
+            service.forceEject(confirmed)
+            guard waitUntil({ !state.busy && state.message.contains("state changed") }) else {
+                return XCTFail("A stale force request must stop before unmounting.")
+            }
+            XCTAssertTrue(state.protected.contains(imageID))
+            _ = try verifiedDisk(at: busyPath, bsd: busyBSD)
+            service.forceEject(retry)
+        } else {
+            service.ejectConfirmed(retry)
+        }
         guard waitUntil(timeout: 35, { !state.busy && state.message.hasPrefix("Ejected ") }) else {
-            return XCTFail("Expected a confirmed eject after closing the busy directory. \(state.message)")
+            return XCTFail("Expected the verified retry to eject the image. \(state.message)")
         }
         XCTAssertTrue(waitUntil {
             DADiskCreateFromBSDName(nil, session, bsd).flatMap(Media.attachmentID) != imageID

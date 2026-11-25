@@ -30,6 +30,25 @@ struct Hardware {
     let attachment: UInt64
     let name: String?
     let kind: InventoryRow.Kind
+    var bus: String? = nil
+}
+
+public enum DriveIcon {
+    case external, thumbDrive, enclosure, diskImage, network, internalDisk
+
+    init(kind: InventoryRow.Kind, bus: String?, model: String?) {
+        switch kind {
+        case .image, .simulatorImage: self = .diskImage
+        case .network: self = .network
+        case .internalDisk: self = .internalDisk
+        case .external where bus == "Thunderbolt" || model?.localizedCaseInsensitiveContains("enclosure") == true:
+            self = .enclosure
+        case .external where bus == "USB":
+            let name = model?.lowercased() ?? ""
+            self = name.contains("flash drive") || name.contains("thumb drive") ? .thumbDrive : .external
+        default: self = .external
+        }
+    }
 }
 
 public struct InventoryRow: Identifiable {
@@ -52,6 +71,7 @@ public struct InventoryRow: Identifiable {
     public internal(set) var apfsTarget: APFSProtectionTarget? = nil
     public let attachment: UInt64?
     public let name: String
+    public let icon: DriveIcon
     public let kind: Kind
     public let volumes: [String]
     public let capacity: Int64?
@@ -85,7 +105,7 @@ public struct InventoryRow: Identifiable {
                 let names = (container.volumes ?? []).compactMap(\.visibleName).sorted()
                 if !names.isEmpty || container.id == startupWhole {
                     rows.append(Self(id: container.id, attachment: nil, name: names.first ?? "APFS container",
-                                     kind: .drive, volumes: names, capacity: nil,
+                                     icon: .external, kind: .drive, volumes: names, capacity: nil,
                                      reason: container.id == startupWhole ? .startup : .ambiguous))
                 }
             }
@@ -114,7 +134,8 @@ public struct InventoryRow: Identifiable {
             else { reason = .unsupported }
             let rootName = records.first { $0.mount == "/" }?.visibleName
             let name = rootName ?? names.first ?? info?.name ?? kind.rawValue
-            rows.append(Self(id: device.id, attachment: info?.attachment, name: name, kind: kind,
+            rows.append(Self(id: device.id, attachment: info?.attachment, name: name,
+                             icon: DriveIcon(kind: kind, bus: info?.bus, model: info?.name), kind: kind,
                              volumes: names, capacity: device.size, reason: reason))
         }
         return rows
@@ -158,7 +179,8 @@ public enum DriveInventory {
                 else if internalFlag == false { kind = .external }
                 else { kind = .drive }
                 let name = media.description[kDADiskDescriptionDeviceModelKey] as? String
-                hardware[device.id] = Hardware(attachment: media.id, name: name, kind: kind)
+                hardware[device.id] = Hardware(attachment: media.id, name: name, kind: kind,
+                                               bus: media.description[kDADiskDescriptionDeviceProtocolKey] as? String)
             }
         }
         var rows = InventoryRow.group(disks, hardware: hardware, startupWhole: startup, testImageID: testImageID)
@@ -178,7 +200,7 @@ public enum DriveInventory {
         for mount in mounts {
             guard let info = try? mount.resourceValues(forKeys: keys), info.volumeIsLocal == false else { continue }
             let name = info.volumeLocalizedName ?? mount.lastPathComponent
-            rows.append(InventoryRow(id: mount.path, attachment: nil, name: name, kind: .network,
+            rows.append(InventoryRow(id: mount.path, attachment: nil, name: name, icon: .network, kind: .network,
                                      volumes: [name], capacity: nil, reason: .share))
         }
         return rows.sorted {
