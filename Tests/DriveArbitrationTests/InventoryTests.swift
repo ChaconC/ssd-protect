@@ -2,6 +2,24 @@ import XCTest
 @testable import DriveArbitration
 
 final class InventoryTests: XCTestCase {
+    func testLockedSingleVolumeRequiresUnlockBeforeMount() {
+        var target = APFSProtectionTarget(id: 1, wholeBSD: "whole", members: ["volume": 2],
+                                          containers: [], singleVolumeBSD: "volume")
+        XCTAssertTrue(target.canRemount)
+        target.singleVolumeLocked = true
+        XCTAssertFalse(target.canRemount)
+    }
+
+    func testUnmountedAPFSKeepsVolumeLabelAndHasNoMountedPaths() throws {
+        let device = DiskRecord(id: "whole", partitions: [.init(id: "store")])
+        let container = DiskRecord(id: "container", stores: [.init(id: "store")],
+                                   volumes: [.init(id: "member", name: "Archive")])
+        let hardware = Hardware(attachment: 1, name: "Enclosure", kind: .external)
+        let row = try XCTUnwrap(InventoryRow.group([device, container], hardware: ["whole": hardware], startupWhole: nil).first)
+        XCTAssertEqual(row.name, "Archive")
+        XCTAssertTrue(row.volumes.isEmpty)
+    }
+
     func testIconsUseHardwareMetadataAndNeverTheVolumeName() {
         func icon(_ kind: InventoryRow.Kind, _ bus: String?, _ model: String?) -> DriveIcon {
             let device = DiskRecord(id: "device", name: "USB Flash Drive", mount: "/Volumes/Test")

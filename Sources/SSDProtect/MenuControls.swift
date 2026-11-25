@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import DriveArbitration
 import SwiftUI
 
@@ -179,7 +180,45 @@ struct QuitButton: NSViewRepresentable {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let appIcons = AppIconSettings()
 
-    func applicationDidFinishLaunching(_ notification: Notification) { appIcons.applySavedAppearance() }
+    let model = MenuModel()
+    private let popover = NSPopover()
+    private var statusItem: NSStatusItem?
+    private var statusUpdates: AnyCancellable?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        appIcons.applySavedAppearance()
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = item
+        guard let button = item.button else { return }
+        button.target = self
+        button.action = #selector(toggleMenu(_:))
+        button.setAccessibilityLabel("SSD Protect")
+        statusUpdates = model.$inventory.sink { [weak button] inventory in
+            button?.image = MenuBarIcon.image(protectedCount: inventory.protected.count)
+            button?.setAccessibilityValue(inventory.menuBarStatus)
+        }
+        popover.behavior = .transient
+        popover.animates = false
+    }
+
+    @objc private func toggleMenu(_ sender: NSStatusBarButton) {
+        if popover.isShown {
+            popover.performClose(sender)
+            return
+        }
+        guard let screen = sender.window?.screen else { return }
+        // Leave room for the native popover arrow and the screen-edge inset.
+        let height = screen.visibleFrame.height - 32
+        let menu = DriveMenu(model: model, requestQuit: requestQuit, availableHeight: height)
+        if let host = popover.contentViewController as? NSHostingController<DriveMenu> {
+            host.rootView = menu
+        } else {
+            let host = NSHostingController(rootView: menu)
+            host.sizingOptions = [.preferredContentSize]
+            popover.contentViewController = host
+        }
+        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+    }
 
     private var confirmingQuit = false
     private var quitApproved = false

@@ -21,6 +21,7 @@ struct AppSettings: View {
 }
 
 struct GeneralSettings: View {
+    @AppStorage("hideFinderEject") private var hideFinderEject = false
     @Binding var restoresProtection: Bool
     let sessionOnlyCount: Int
     @ObservedObject var login: LoginItem
@@ -55,6 +56,11 @@ struct GeneralSettings: View {
                     Text("\(sessionOnlyCount) session-only. These drives lack a verified, unique identity.")
                         .foregroundStyle(.secondary)
                 }
+            }
+            Divider()
+            VStack(alignment: .leading, spacing: 7) {
+                Toggle("Hide Finder Eject on protection changes", isOn: $hideFinderEject)
+                Text("Hiding Eject remounts an eligible unencrypted APFS volume. Encrypted volumes keep their Finder Eject button and use ordinary eject protection.").foregroundStyle(.secondary)
             }
             Divider()
             VStack(alignment: .leading, spacing: 8) {

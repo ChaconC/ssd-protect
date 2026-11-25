@@ -10,6 +10,20 @@ public struct APFSProtectionTarget: Equatable {
     let containers: Set<UInt64>
     public internal(set) var mountedVolumes: [String: URL] = [:]
 
+    var unencryptedMountedMembers: Set<String> = []
+    var singleVolumeBSD: String? = nil
+
+    public internal(set) var singleVolumeLocked = false
+
+    public var canRemount: Bool { mountedVolumes.isEmpty && singleVolumeBSD != nil && !singleVolumeLocked }
+
+    func nextEjectBSD(verifiedBy current: Self?) -> String? {
+        guard let current, id == current.id, wholeBSD == current.wholeBSD,
+              members == current.members, containers == current.containers,
+              mountedVolumes == current.mountedVolumes else { return nil }
+        return mountedVolumes.keys.sorted().first ?? wholeBSD
+    }
+
     func covers(_ bsd: String, observed: UInt64?) -> Bool {
         guard let observed else { return false }
         return members[bsd] == observed
@@ -54,6 +68,7 @@ public struct APFSProtectionTarget: Equatable {
         }
         var members: [String: UInt64] = [:]
         var mounted: [String: URL] = [:]
+        var unencrypted: Set<String> = []
         for name in aliases {
             guard let disk = DADiskCreateFromBSDName(nil, session, name),
                   let id = memberID(disk, under: media.id),
@@ -61,11 +76,29 @@ public struct APFSProtectionTarget: Equatable {
             if let path = details[kDADiskDescriptionVolumePathKey] as? URL {
                 guard path.isFileURL, path.path != "/" else { return nil }
                 mounted[name] = path
+                if details[kDADiskDescriptionMediaEncryptedKey] as? Bool == false { unencrypted.insert(name) }
             }
             members[name] = id
         }
         let containers = Set(disks.filter(\.isContainer).compactMap { members[$0.id] })
-        return Self(id: media.id, wholeBSD: device.id, members: members, containers: containers, mountedVolumes: mounted)
+        let volumes = disks.filter { record in members[record.id].map(containers.contains) == true }
+            .flatMap { $0.volumes ?? [] }
+        let singleVolume = volumes.count == 1 ? volumes[0].id : nil
+        var locked = false
+        if mounted.isEmpty, let singleVolume, let disk = DADiskCreateFromBSDName(nil, session, singleVolume) {
+            let entry = DADiskCopyIOMedia(disk)
+            if entry != 0 {
+                defer { IOObjectRelease(entry) }
+                var registryID: UInt64 = 0
+                guard IORegistryEntryGetRegistryEntryID(entry, &registryID) == KERN_SUCCESS,
+                      registryID == members[singleVolume] else { return nil }
+                locked = IORegistryEntryCreateCFProperty(entry, "Locked" as CFString, nil, 0)?
+                    .takeRetainedValue() as? Bool == true
+            }
+        }
+        return Self(id: media.id, wholeBSD: device.id, members: members, containers: containers,
+                    mountedVolumes: mounted, unencryptedMountedMembers: unencrypted,
+                    singleVolumeBSD: singleVolume, singleVolumeLocked: locked)
     }
 
     // An APFS sibling can appear between inventory scans. Bind it on the serial
