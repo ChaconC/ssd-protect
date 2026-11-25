@@ -42,7 +42,8 @@ enum FinderMount {
 extension APFSProtectionTarget {
     /// A remount confirmation covers exactly one ordinary mounted volume.
     public var finderVolume: URL? {
-        guard mountedVolumes.count == 1, let path = mountedVolumes.values.first,
+        guard mountedVolumes.count == 1, let (bsd, path) = mountedVolumes.first,
+              unencryptedMountedMembers.contains(bsd),
               path.deletingLastPathComponent().path == "/Volumes" else { return nil }
         return path
     }

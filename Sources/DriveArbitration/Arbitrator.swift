@@ -755,6 +755,7 @@ extension Arbitrator {
                           let session = self.session, let disk = DADiskCreateFromBSDName(nil, session, bsd),
                           let media = Media(disk), media.id == member,
                           media.description[kDADiskDescriptionVolumePathKey] as? URL == path,
+                          media.description[kDADiskDescriptionMediaEncryptedKey] as? Bool == false,
                           media.description[kDADiskDescriptionVolumeKindKey] as? String == "apfs" else {
                         self.finish("Drive or mount changed. Reopen the drive menu.")
                         return

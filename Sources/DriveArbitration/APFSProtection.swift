@@ -10,6 +10,7 @@ public struct APFSProtectionTarget: Equatable {
     let containers: Set<UInt64>
     public internal(set) var mountedVolumes: [String: URL] = [:]
 
+    var unencryptedMountedMembers: Set<String> = []
     var singleVolumeBSD: String? = nil
 
     public internal(set) var singleVolumeLocked = false
@@ -60,6 +61,7 @@ public struct APFSProtectionTarget: Equatable {
         }
         var members: [String: UInt64] = [:]
         var mounted: [String: URL] = [:]
+        var unencrypted: Set<String> = []
         for name in aliases {
             guard let disk = DADiskCreateFromBSDName(nil, session, name),
                   let id = memberID(disk, under: media.id),
@@ -67,6 +69,7 @@ public struct APFSProtectionTarget: Equatable {
             if let path = details[kDADiskDescriptionVolumePathKey] as? URL {
                 guard path.isFileURL, path.path != "/" else { return nil }
                 mounted[name] = path
+                if details[kDADiskDescriptionMediaEncryptedKey] as? Bool == false { unencrypted.insert(name) }
             }
             members[name] = id
         }
@@ -87,7 +90,8 @@ public struct APFSProtectionTarget: Equatable {
             }
         }
         return Self(id: media.id, wholeBSD: device.id, members: members, containers: containers,
-                    mountedVolumes: mounted, singleVolumeBSD: singleVolume, singleVolumeLocked: locked)
+                    mountedVolumes: mounted, unencryptedMountedMembers: unencrypted,
+                    singleVolumeBSD: singleVolume, singleVolumeLocked: locked)
     }
 
     // An APFS sibling can appear between inventory scans. Bind it on the serial

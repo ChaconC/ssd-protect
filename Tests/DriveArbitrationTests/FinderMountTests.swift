@@ -2,6 +2,17 @@ import XCTest
 @testable import DriveArbitration
 
 final class FinderMountTests: XCTestCase {
+    func testFinderRemountRequiresPositiveUnencryptedEvidenceForSelectedVolume() {
+        let path = URL(fileURLWithPath: "/Volumes/Test")
+        var target = APFSProtectionTarget(id: 1, wholeBSD: "whole", members: ["selected": 2],
+                                          containers: [], mountedVolumes: ["selected": path])
+        XCTAssertNil(target.finderVolume)
+        target.unencryptedMountedMembers = ["other"]
+        XCTAssertNil(target.finderVolume)
+        target.unencryptedMountedMembers = ["selected"]
+        XCTAssertEqual(target.finderVolume, path)
+    }
+
     func testUnsupportedMountSemanticsAreRejectedBeforeUnmount() {
         XCTAssertFalse(FinderMount.supports(flags: UInt32(MNT_SNAPSHOT | MNT_RDONLY)))
         XCTAssertFalse(FinderMount.supports(flags: UInt32(MNT_ROOTFS)))

@@ -60,7 +60,7 @@ struct GeneralSettings: View {
             Divider()
             VStack(alignment: .leading, spacing: 7) {
                 Toggle("Hide Finder Eject on protection changes", isOn: $hideFinderEject)
-                Text("Manually toggling protection remounts eligible external APFS drives with one mounted volume.").foregroundStyle(.secondary)
+                Text("Hiding Eject remounts an eligible unencrypted APFS volume. Encrypted volumes keep their Finder Eject button and use ordinary eject protection.").foregroundStyle(.secondary)
             }
             Divider()
             VStack(alignment: .leading, spacing: 8) {
