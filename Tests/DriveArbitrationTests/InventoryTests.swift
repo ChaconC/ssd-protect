@@ -2,6 +2,21 @@ import XCTest
 @testable import DriveArbitration
 
 final class InventoryTests: XCTestCase {
+    func testIconsUseHardwareMetadataAndNeverTheVolumeName() {
+        func icon(_ kind: InventoryRow.Kind, _ bus: String?, _ model: String?) -> DriveIcon {
+            let device = DiskRecord(id: "device", name: "USB Flash Drive", mount: "/Volumes/Test")
+            let hardware = Hardware(attachment: 1, name: model, kind: kind, bus: bus)
+            return InventoryRow.group([device], hardware: ["device": hardware], startupWhole: nil)[0].icon
+        }
+        XCTAssertEqual(icon(.external, "USB", nil), .external)
+        XCTAssertEqual(icon(.external, "USB", "Portable SSD"), .external)
+        XCTAssertEqual(icon(.external, "USB", " USB Flash Drive "), .thumbDrive)
+        XCTAssertEqual(icon(.external, "Thunderbolt", nil), .enclosure)
+        XCTAssertEqual(icon(.external, "USB", "NVMe Enclosure"), .enclosure)
+        XCTAssertEqual(icon(.external, "PCI-Express", nil), .external)
+        XCTAssertEqual(icon(.image, "Disk Image", nil), .diskImage)
+    }
+
     func testAPFSVolumesGroupUnderOnePhysicalDiskWithoutAddingSharedCapacity() throws {
         let physical = DiskRecord(id: "physical", size: 2_000, partitions: [.init(id: "store")])
         let container = DiskRecord(id: "container", size: 1_900, stores: [.init(id: "store")],

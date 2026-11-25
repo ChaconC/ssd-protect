@@ -23,8 +23,9 @@ ambiguous requirements before giving a detailed proposal. Avoid em dashes.
 - Treat names, mount paths and BSD disk numbers as transient. Verify the current
   physical attachment before an eject. Disable whole-drive operations for the
   startup disk and for ambiguous mappings.
-- Preserve the saved protection rule during an intentional eject. A busy normal
-  unmount and a separate user confirmation are prerequisites for forced unmount.
+- Preserve the saved protection rule during an intentional eject. Ordinary eject requires
+  confirmation. Only explicit Option-activation may force unmount without a
+  confirmation. Never escalate an ordinary eject after a busy result.
   Report success only after the system confirms eject.
 - Exercise policy changes with simulated drives first. Reserve physical eject
   tests for explicitly designated expendable media.

@@ -7,6 +7,7 @@ public struct Drive: Identifiable, Equatable {
     public let id: UInt64
     public let name: String
     public let mount: URL
+    public let icon: DriveIcon
     public let transport: String
     fileprivate let bsd: String
 }
@@ -81,7 +82,9 @@ struct Media {
               let url = description[kDADiskDescriptionVolumePathKey] as? URL,
               url.deletingLastPathComponent().path == "/Volumes",
               let name = description[kDADiskDescriptionVolumeNameKey] as? String else { return nil }
-        return Drive(id: id, name: name, mount: url, transport: transport, bsd: bsd)
+        let icon = DriveIcon(kind: transport == "Disk Image" ? .image : .external, bus: transport,
+                             model: description[kDADiskDescriptionDeviceModelKey] as? String)
+        return Drive(id: id, name: name, mount: url, icon: icon, transport: transport, bsd: bsd)
     }
 }
 
@@ -332,6 +335,15 @@ public final class Arbitrator {
 
     /// Call after confirming every path in the supplied mount snapshot.
     public func ejectConfirmed(_ target: APFSProtectionTarget) {
+        eject(target, unmountOptions: 0)
+    }
+
+    /// Explicit Option-activation for this attachment and mount snapshot.
+    public func forceEject(_ target: APFSProtectionTarget) {
+        eject(target, unmountOptions: UInt32(kDADiskUnmountOptionForce))
+    }
+
+    private func eject(_ target: APFSProtectionTarget, unmountOptions: DADiskUnmountOptions) {
         queue.async {
             guard self.active == nil, !self.uncertain.contains(target.id) else {
                 self.report("Eject unavailable. Check the current drive and operation.")
@@ -345,11 +357,11 @@ public final class Arbitrator {
                 self.uncertain.insert(target.id)
                 self.finish("Eject timed out. Check mount state and reconnect before retrying.")
             }
-            self.advanceAPFSEject(expected: target, token: token)
+            self.advanceAPFSEject(expected: target, unmountOptions: unmountOptions, token: token)
         }
     }
 
-    private func advanceAPFSEject(expected: APFSProtectionTarget, token: UUID) {
+    private func advanceAPFSEject(expected: APFSProtectionTarget, unmountOptions: DADiskUnmountOptions, token: UUID) {
         let revision = topologyRevision
         verifier.async { [self] in
             let rows = try? DriveInventory.read(testImageID: self.testImageID)
@@ -357,7 +369,7 @@ public final class Arbitrator {
             self.queue.async { [self] in
                 guard self.active == token else { return }
                 guard self.topologyRevision == revision else {
-                    self.advanceAPFSEject(expected: expected, token: token)
+                    self.advanceAPFSEject(expected: expected, unmountOptions: unmountOptions, token: token)
                     return
                 }
                 guard row?.apfsTarget == expected else {
@@ -383,14 +395,14 @@ public final class Arbitrator {
                     } else if let nextVolume {
                         var remaining = expected
                         remaining.mountedVolumes.removeValue(forKey: nextVolume)
-                        self.advanceAPFSEject(expected: remaining, token: token)
+                        self.advanceAPFSEject(expected: remaining, unmountOptions: unmountOptions, token: token)
                     } else {
                         self.finish("Ejected \(row?.name ?? "APFS drive").")
                     }
                 }
                 if let mount = expected.mountedVolumes[bsd] {
                     self.report("Unmounting \(mount.lastPathComponent)…")
-                    DADiskUnmount(disk, 0, completed, reply.retainedContext())
+                    DADiskUnmount(disk, unmountOptions, completed, reply.retainedContext())
                 } else {
                     self.report("Ejecting APFS drive…")
                     DADiskEject(disk, 0, completed, reply.retainedContext())
@@ -421,6 +433,15 @@ public final class Arbitrator {
 
     // Call only after the user confirms this exact attachment and mounted volume.
     public func ejectConfirmed(_ target: Drive) {
+        eject(target, unmountOptions: 0)
+    }
+
+    /// Explicit Option-activation for this attachment and mount snapshot.
+    public func forceEject(_ target: Drive) {
+        eject(target, unmountOptions: UInt32(kDADiskUnmountOptionForce))
+    }
+
+    private func eject(_ target: Drive, unmountOptions: DADiskUnmountOptions) {
         queue.async { [self] in
             guard self.active == nil, !self.uncertain.contains(target.id),
                   let media = self.fresh(target), media.drive == target else {
@@ -454,7 +475,7 @@ public final class Arbitrator {
                 }
                 DADiskEject(unmounted.disk, 0, completed, reply.retainedContext())
             }
-            DADiskUnmount(media.disk, UInt32(kDADiskUnmountOptionWhole), completed, reply.retainedContext())
+            DADiskUnmount(media.disk, unmountOptions, completed, reply.retainedContext())
         }
     }
 

@@ -34,23 +34,30 @@ collapsed disclosure. It lists other mounted disk images and network shares
 with their eligibility. Drive capacity is counted once per physical device.
 Multi-store APFS containers and unverified devices are informational.
 
-Choose **Eject…** to disconnect a supported drive while keeping its protection
+Click the eject symbol to disconnect a supported drive while keeping its protection
 switch on. For APFS, the confirmation lists every mounted volume on the drive.
 Cancel is the default. Choosing **Eject** starts a normal unmount and eject.
-If a volume is busy, close the files using it and try again. Wait for the app
-to confirm the eject before disconnecting the drive.
+If a volume is busy, close the files using it and try again. To force eject
+without confirmation, hold **Option** while clicking the eject symbol or
+pressing Space on the focused button. This can discard unsaved changes on
+any volume on the selected drive. Wait for the app to confirm eject before
+disconnecting it.
 
 Disk Arbitration does not identify the requester, so a concurrent request for
-the same drive and phase can share that approval. **Quit and Stop Protection**
-ends enforcement.
+the same drive and phase can share that approval. Choosing **Quit** and confirming ends
+enforcement.
 
 To run the integration test, set `SSD_PROTECT_TEST_IMAGE` to the exact mount
 path of a disposable, eligible image and run `swift test`. The test attempts
 an ordinary unmount, checks that it was blocked, then ejects that image.
+Use a second whole-media image with `SSD_PROTECT_TEST_FORCE_IMAGE` to test
+force eject while the volume is busy.
 
 For the APFS integration test, set `SSD_PROTECT_TEST_APFS_IMAGE` to the exact
 mount path of one of two mounted sibling volumes on a disposable GPT/APFS
-image. The test verifies the backing image before exercising Disk Arbitration.
+image. Use a separate disposable two-volume image with
+`SSD_PROTECT_TEST_FORCE_APFS_IMAGE` to exercise force eject with a busy volume.
+Both tests verify the backing image before exercising Disk Arbitration.
 
 See [Contributing](CONTRIBUTING.md) for the pull request workflow. Source is
 available under the [MIT License](LICENSE).

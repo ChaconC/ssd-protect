@@ -90,82 +90,117 @@ private final class MenuModel: ObservableObject {
 
 @main
 struct SSDProtectApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = MenuModel()
-    @State private var showsSimulatorImages = false
-
     var body: some Scene {
         MenuBarExtra {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("SSD Protect").font(.headline)
-                Text(protectionStatus).foregroundStyle(.secondary)
-                Divider()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        let rows = inventoryRows
-                        let simulators = rows.filter { $0.kind == .simulatorImage }
-                        ForEach(model.inventory.drives) { drive in
-                            VStack(alignment: .leading) {
-                                Toggle(drive.name, isOn: Binding(
-                                    get: { model.inventory.protected.contains(drive.id) },
-                                    set: { model.arbitrator.protect(drive, enabled: $0) }
-                                )).toggleStyle(.switch)
-                                HStack {
-                                    Text(drive.transport).foregroundStyle(.secondary)
-                                    Spacer()
-                                    Button("Eject…") { model.confirm(drive) }
-                                }
-                            }.disabled(controlsUnavailable)
-                            Divider()
-                        }
-                        ForEach(rows.filter { $0.kind != .simulatorImage }) { row in
-                            inventoryRow(row)
-                            Divider()
-                        }
-                        if !simulators.isEmpty {
-                            DisclosureGroup("Simulator disk images (\(simulators.count))", isExpanded: $showsSimulatorImages) {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    ForEach(simulators) { row in inventoryRow(row) }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.top, 4)
-                            }
-                        }
-                        if let message = model.scanMessage {
-                            Text(message).foregroundStyle(.secondary)
-                        } else if rows.isEmpty && model.inventory.drives.isEmpty {
-                            Text("No drives to show.").foregroundStyle(.secondary)
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 370)
-                .fixedSize(horizontal: false, vertical: true)
-                if !model.inventory.message.isEmpty { Text(model.inventory.message).font(.callout) }
-                Button("Quit and Stop Protection") { NSApp.terminate(nil) }
-            }
-            .padding()
-            .frame(width: 340)
-            .onAppear { model.refresh() }
+            DriveMenu(model: model, requestQuit: delegate.requestQuit)
         } label: {
             MenuBarIcon(protectedCount: protectedCount)
                 .accessibilityLabel("SSD Protect")
-                .accessibilityValue(protectionStatus)
+                .accessibilityValue(model.inventory.menuBarStatus)
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            Text("No settings available.")
+                .foregroundStyle(.secondary)
+                .frame(width: 300, height: 100)
+        }
+        .windowResizability(.contentSize)
     }
 
     private var protectedCount: Int {
         model.inventory.protected.count
     }
+}
 
-    private var protectionStatus: String {
-        guard let available = model.inventory.available else { return "Starting protection…" }
+extension Inventory {
+    var protectionWarning: String? {
+        guard let available else { return "Starting protection…" }
         guard available else { return "Protection unavailable" }
-        let suspended = model.inventory.suspendedAPFS.count
-        if protectedCount == 0 {
-            return suspended == 0 ? "No drives protected" : "Protection suspended for \(suspended) \(suspended == 1 ? "drive" : "drives")"
+        let suspended = suspendedAPFS.count
+        return suspended == 0 ? nil : "Protection suspended for \(suspended) \(suspended == 1 ? "drive" : "drives")"
+    }
+
+    var menuBarStatus: String {
+        guard available == true, !protected.isEmpty else {
+            return protectionWarning ?? "No drives protected"
         }
-        let active = "Protecting \(protectedCount) \(protectedCount == 1 ? "drive" : "drives")"
-        return suspended == 0 ? active : "\(active) · \(suspended) suspended"
+        let active = "Protecting \(protected.count) \(protected.count == 1 ? "drive" : "drives")"
+        return suspendedAPFS.isEmpty ? active : "\(active) · \(suspendedAPFS.count) suspended"
+    }
+}
+
+private struct DriveMenu: View {
+    @ObservedObject var model: MenuModel
+    let requestQuit: (NSWindow) -> Void
+    @StateObject private var option = OptionKey()
+    @State private var showsSimulatorImages = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("SSD Protect").font(.headline)
+            if let warning = model.inventory.protectionWarning {
+                Text(warning).foregroundStyle(.secondary)
+            }
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    let rows = inventoryRows
+                    let simulators = rows.filter { $0.kind == .simulatorImage }
+                    ForEach(model.inventory.drives) { drive in
+                        DriveRow(icon: drive.icon, name: drive.name) {
+                            Text(drive.transport)
+                        } actions: {
+                            DriveActions(name: drive.name, protected: Binding(
+                                get: { model.inventory.protected.contains(drive.id) },
+                                set: { model.arbitrator.protect(drive, enabled: $0) }
+                            ), optionDown: option.isDown, eject: { model.confirm(drive) },
+                               forceEject: { model.arbitrator.forceEject(drive) })
+                        }.disabled(controlsUnavailable)
+                    }
+                    ForEach(rows.filter { $0.kind != .simulatorImage }) { row in
+                        inventoryRow(row)
+                    }
+                    if !simulators.isEmpty {
+                        DisclosureGroup("Simulator disk images (\(simulators.count))", isExpanded: $showsSimulatorImages) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(simulators) { row in inventoryRow(row) }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 4)
+                        }
+                    }
+                    if let message = model.scanMessage {
+                        Text(message).foregroundStyle(.secondary)
+                    } else if rows.isEmpty && model.inventory.drives.isEmpty {
+                        Text("No drives to show.").foregroundStyle(.secondary)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 370)
+            .fixedSize(horizontal: false, vertical: true)
+            if !model.inventory.message.isEmpty { Text(model.inventory.message).font(.callout) }
+            Divider()
+            HStack {
+                SettingsLink {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Settings")
+                .help("Open Settings")
+                Spacer()
+                QuitButton(request: requestQuit).fixedSize()
+            }
+        }
+        .padding()
+        .frame(width: 340)
+        .onAppear {
+            option.start()
+            model.refresh()
+        }
+        .onDisappear { option.stop() }
     }
 
     private var controlsUnavailable: Bool { model.inventory.busy || model.inventory.available != true }
@@ -179,36 +214,28 @@ struct SSDProtectApp: App {
 
     private func inventoryRow(_ row: InventoryRow) -> some View {
         let suspended = row.attachment.flatMap { model.inventory.suspendedAPFS.contains($0) ? $0 : nil }
-        return VStack(alignment: .leading, spacing: 3) {
-            if let target = row.apfsTarget, suspended == nil {
-                Toggle(row.name, isOn: Binding(
-                    get: { model.inventory.protected.contains(target.id) },
-                    set: { model.arbitrator.protect(target, enabled: $0) }
-                ))
-                .toggleStyle(.switch)
-                .accessibilityLabel("Protect \(row.name)")
-                .disabled(controlsUnavailable)
-            } else {
-                Text(row.name).fontWeight(.medium)
-            }
-            HStack {
-                Text(details(row)).font(.caption).foregroundStyle(.secondary)
+        return VStack(alignment: .leading, spacing: 4) {
+            DriveRow(icon: row.icon, name: row.name) {
+                Text(details(row))
+                if row.volumes.count > 1 { Text(row.volumes.joined(separator: ", ")) }
+                if suspended != nil {
+                    Text("Protection suspended until the drive can be verified.")
+                } else if row.apfsTarget == nil {
+                    Text(row.reason.rawValue)
+                }
+            } actions: {
                 if let target = row.apfsTarget, suspended == nil {
-                    Spacer()
-                    Button("Eject…") { model.confirm(target, named: row.name) }
-                        .accessibilityLabel("Eject \(row.name)…")
+                    DriveActions(name: row.name, protected: Binding(
+                        get: { model.inventory.protected.contains(target.id) },
+                        set: { model.arbitrator.protect(target, enabled: $0) }
+                    ), optionDown: option.isDown, eject: { model.confirm(target, named: row.name) },
+                       forceEject: { model.arbitrator.forceEject(target) })
                         .disabled(controlsUnavailable)
                 }
             }
-            if row.volumes.count > 1 {
-                Text(row.volumes.joined(separator: ", ")).font(.caption)
-            }
             if let suspended {
-                Text("Protection suspended until the drive can be verified.").font(.callout)
                 Button("Turn Off Protection") { model.arbitrator.disableAPFSProtection(for: suspended) }
                     .disabled(controlsUnavailable)
-            } else if row.apfsTarget == nil {
-                Text(row.reason.rawValue).font(.callout)
             }
         }
     }

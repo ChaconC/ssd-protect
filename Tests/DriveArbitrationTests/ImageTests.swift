@@ -9,8 +9,16 @@ private final class UnmountResult {
 final class ImageTests: XCTestCase {
     // Opt-in with the exact mount path of a disposable, whole-media disk image.
     func testProtectedImageRejectsUnmountThenEjectsAfterConfirmation() throws {
-        guard let path = ProcessInfo.processInfo.environment["SSD_PROTECT_TEST_IMAGE"] else {
-            throw XCTSkip("Set SSD_PROTECT_TEST_IMAGE to exercise a disposable mounted image.")
+        try exerciseImage(variable: "SSD_PROTECT_TEST_IMAGE", force: false)
+    }
+
+    func testExplicitForceEjectUnmountsBusyProtectedLeafImage() throws {
+        try exerciseImage(variable: "SSD_PROTECT_TEST_FORCE_IMAGE", force: true)
+    }
+
+    private func exerciseImage(variable: String, force: Bool) throws {
+        guard let path = ProcessInfo.processInfo.environment[variable] else {
+            throw XCTSkip("Set \(variable) to exercise a disposable mounted image.")
         }
         var state = Inventory()
         let service = Arbitrator { state = $0 }
@@ -50,7 +58,22 @@ final class ImageTests: XCTestCase {
         }
         XCTAssertNoThrow(try FileManager.default.contentsOfDirectory(atPath: path))
 
-        service.ejectConfirmed(drive)
+        let holder = Process()
+        defer {
+            if holder.isRunning {
+                holder.terminate()
+                holder.waitUntilExit()
+            }
+        }
+        if force {
+            holder.executableURL = URL(fileURLWithPath: "/bin/sleep")
+            holder.arguments = ["120"]
+            holder.currentDirectoryURL = drive.mount
+            try holder.run()
+            service.forceEject(drive)
+        } else {
+            service.ejectConfirmed(drive)
+        }
         XCTAssertTrue(waitUntil { state.message == "Ejected \(drive.name)." }, state.message)
         XCTAssertTrue(waitUntil { target() == nil })
         XCTAssertFalse(FileManager.default.fileExists(atPath: path))
