@@ -732,7 +732,7 @@ public final class Arbitrator {
         var snapshot = Inventory(drives: Array(drives.values).sorted { $0.name < $1.name },
                               protected: policy.enrolled.union(apfsRules.keys), suspendedAPFS: enrollments.suspended,
                               available: session != nil, busy: active != nil, message: message)
-        snapshot.finderRecoveryPaths = finderRecovery.mapValues(\.path)
+        snapshot.finderRecoveryPaths = finderRecovery.filter { !uncertain.contains($0.key) }.mapValues(\.path)
         snapshot.restoresProtection = restoration.enabled
         snapshot.sessionOnly = snapshot.protected.union(enrollments.suspended)
             .subtracting(restoration.bindings.keys).subtracting(pendingSaves)
@@ -779,6 +779,10 @@ extension Arbitrator {
                 guard self.active?.token == token else { return }
                 if preflighting {
                     self.finish("Volume check timed out. Reopen the drive menu and retry.")
+                    return
+                }
+                if let path = self.finderRecovery[target.id]?.retryPathAfterTimeout(pendingUnmount: self.apfsPermit) {
+                    self.finish("Volume check timed out at \(path.path). Choose Retry Remount.")
                     return
                 }
                 self.uncertain.insert(target.id)

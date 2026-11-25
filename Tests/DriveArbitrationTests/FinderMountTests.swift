@@ -73,6 +73,21 @@ final class FinderMountTests: XCTestCase {
         XCTAssertEqual(FinderMount.options(flags: try XCTUnwrap(flagsForVisibleMount), hidden: false), ["nosuid"])
     }
 
+    func testTimeoutAfterStagingAllowsRetryOnlyBeforeUnmountStarts() {
+        let original = APFSProtectionTarget(id: 1, wholeBSD: "whole", members: ["volume": 2],
+                                            containers: [], mountedVolumes: ["volume": URL(fileURLWithPath: "/Volumes/Test")])
+        let path = URL(fileURLWithPath: "/private/tmp/staged")
+        let stage = FinderStagingMount(original: original, bsd: "volume", path: path, originalFlags: 0)
+        var current = original
+        current.mountedVolumes["volume"] = path
+        XCTAssertEqual(stage.retryPathAfterTimeout(pendingUnmount: nil), path)
+        XCTAssertTrue(stage.matches(current))
+        current.members["volume"] = 3
+        XCTAssertFalse(stage.matches(current))
+        let inFlight = APFSEjectPermit(root: 1, member: 2, phase: .unmount)
+        XCTAssertNil(stage.retryPathAfterTimeout(pendingUnmount: inFlight))
+    }
+
     func testUnsupportedMountSemanticsAreRejectedBeforeUnmount() {
         XCTAssertFalse(FinderMount.supports(flags: UInt32(MNT_SNAPSHOT | MNT_RDONLY)))
         XCTAssertFalse(FinderMount.supports(flags: UInt32(MNT_ROOTFS)))

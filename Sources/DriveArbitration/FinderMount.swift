@@ -61,6 +61,12 @@ struct FinderStagingMount {
     let path: URL
     let originalFlags: UInt32
 
+    // A staged mount can be recovered after a probe times out. Once its
+    // unmount is submitted, the late callback could still change disk state.
+    func retryPathAfterTimeout(pendingUnmount: APFSEjectPermit?) -> URL? {
+        pendingUnmount == nil ? path : nil
+    }
+
     func matches(_ current: APFSProtectionTarget) -> Bool {
         var expected = original
         expected.mountedVolumes[bsd] = path
