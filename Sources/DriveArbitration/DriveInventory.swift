@@ -148,8 +148,8 @@ public struct InventoryRow: Identifiable {
 public enum DriveInventory {
     private struct Listing: Decodable { let AllDisksAndPartitions: [DiskRecord] }
 
-    public static func read() throws -> [InventoryRow] {
-        try read(testImageID: nil)
+    public static func read(includeNetworkShares: Bool = true) throws -> [InventoryRow] {
+        try read(testImageID: nil, includeNetworkShares: includeNetworkShares)
     }
 
     static func read(testImageID: UInt64?, includeRestoreIdentity: Bool = false, includeNetworkShares: Bool = true) throws -> [InventoryRow] {

@@ -155,36 +155,31 @@ final class MenuModel: ObservableObject {
             return
         }
         disablingFinderHelper = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let scan = Result {
-                try DriveInventory.read().compactMap(\.apfsTarget).filter { $0.encryptedFinderFlag == true }
-            }
-            DispatchQueue.main.async {
-                switch scan {
-                case .failure(let error):
-                    self.finishFinderDisable(registration, error: error)
-                case .success(let targets):
-                    guard !targets.isEmpty else {
-                        self.finishFinderDisable(registration, error: nil)
-                        return
-                    }
-                    // A volume may already have carried this flag before SSD Protect ran.
-                    // Name every affected mount and let the user decline the changes.
-                    let alert = NSAlert()
-                    alert.messageText = "Restore Finder Eject before disabling the helper?"
-                    alert.informativeText = targets.compactMap { $0.encryptedFinderVolume?.path }.sorted().joined(separator: "\n")
-                        + "\n\nThese mounted encrypted volumes have the Finder flag set. Ordinary protection stays active."
-                    alert.addButton(withTitle: "Restore and Disable")
-                    alert.addButton(withTitle: "Cancel")
-                    alert.addButton(withTitle: "Disable Only")
-                    switch alert.runModal() {
-                    case .alertFirstButtonReturn:
-                        self.restoreBeforeDisabling(targets, registration: registration)
-                    case .alertThirdButtonReturn:
-                        self.finishFinderDisable(registration, error: nil)
-                    default:
-                        self.disablingFinderHelper = false
-                    }
+        FinderDisableScan.start { scan in
+            switch scan {
+            case .failure(let error):
+                self.finishFinderDisable(registration, error: error)
+            case .success(let targets):
+                guard !targets.isEmpty else {
+                    self.finishFinderDisable(registration, error: nil)
+                    return
+                }
+                // A volume may already have carried this flag before SSD Protect ran.
+                // Name every affected mount and let the user decline the changes.
+                let alert = NSAlert()
+                alert.messageText = "Restore Finder Eject before disabling the helper?"
+                alert.informativeText = targets.compactMap { $0.encryptedFinderVolume?.path }.sorted().joined(separator: "\n")
+                    + "\n\nThese mounted encrypted volumes have the Finder flag set. Ordinary protection stays active."
+                alert.addButton(withTitle: "Restore and Disable")
+                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Disable Only")
+                switch alert.runModal() {
+                case .alertFirstButtonReturn:
+                    self.restoreBeforeDisabling(targets, registration: registration)
+                case .alertThirdButtonReturn:
+                    self.finishFinderDisable(registration, error: nil)
+                default:
+                    self.disablingFinderHelper = false
                 }
             }
         }
