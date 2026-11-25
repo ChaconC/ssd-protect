@@ -3,6 +3,7 @@ import ServiceManagement
 import SwiftUI
 
 struct AppSettings: View {
+    @ObservedObject var model: MenuModel
     @Binding var restoresProtection: Bool
     let sessionOnlyCount: Int
     @ObservedObject var appIcons: AppIconSettings
@@ -10,7 +11,7 @@ struct AppSettings: View {
 
     var body: some View {
         TabView {
-            GeneralSettings(restoresProtection: $restoresProtection, sessionOnlyCount: sessionOnlyCount, login: login, appIcons: appIcons)
+            GeneralSettings(model: model, restoresProtection: $restoresProtection, sessionOnlyCount: sessionOnlyCount, login: login, appIcons: appIcons)
                 .tabItem { Label("General", systemImage: "gearshape") }
             AboutSettings(appIcons: appIcons)
                 .tabItem { Label("About", systemImage: "info.circle") }
@@ -21,6 +22,7 @@ struct AppSettings: View {
 }
 
 struct GeneralSettings: View {
+    @ObservedObject var model: MenuModel
     @StateObject private var finderHelper = LoginItem(status: { FinderHelper.service.status }, change: { enabled in
         if enabled { try FinderHelper.service.register() } else { try FinderHelper.service.unregister() }
     })
@@ -68,9 +70,18 @@ struct GeneralSettings: View {
             VStack(alignment: .leading, spacing: 7) {
                 Toggle("Hide Finder Eject on encrypted APFS", isOn: Binding(
                     get: { finderHelper.status == .enabled || finderHelper.status == .requiresApproval },
-                    set: finderHelper.setRequested
+                    set: { enabled in
+                        if enabled { finderHelper.setRequested(true) }
+                        else { model.disableFinderHelper(finderHelper) }
+                    }
                 ))
-                Text("Approve the Finder helper once to update mounted encrypted volumes when protection changes. Turning this off unregisters the helper.")
+                .disabled(model.disablingFinderHelper || !model.finderRequests.isEmpty)
+                if model.disablingFinderHelper {
+                    ProgressView("Checking mounted volumes…").controlSize(.small)
+                } else if let message = model.helperSettingsMessage, finderHelper.status == .notRegistered {
+                    Text(message).foregroundStyle(.secondary)
+                }
+                Text("Turning this off lets you restore Finder Eject on eligible mounted volumes before removing the helper.")
                     .foregroundStyle(.secondary)
                 if finderHelper.status == .requiresApproval {
                     Text("Approve SSD Protect in System Settings to enable the Finder helper.").foregroundStyle(.secondary)

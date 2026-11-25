@@ -46,8 +46,8 @@ Open **Settings → General** to configure SSD Protect:
   and approve SSD Protect under System Settings → General → Login Items &
   Extensions. macOS retains approval for the on-demand helper. After an
   update, choose **Relaunch Finder…** to refresh Locations and Computer.
-  Open files on the drive stay accessible. Turning off the setting unregisters
-  the helper. If the helper is unavailable, the protection switch still controls
+  Open files on the drive stay accessible. Turning off the setting offers to clear the flag on the listed
+  mounted volumes before unregistering the helper. Relaunch Finder afterward. If the helper is unavailable, the protection switch still controls
   ordinary eject protection. Choose **Retry Finder Update** on the drive to try again.
   Opening the menu refreshes the inventory. The circular-arrow button refreshes it manually.
 

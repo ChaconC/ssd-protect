@@ -11,6 +11,8 @@ final class MenuModel: ObservableObject {
     @Published private(set) var finderRequests: [UInt64: UUID] = [:]
     @Published var finderUpdateMessage: String?
     @Published var offersFinderRelaunch = false
+    @Published private(set) var disablingFinderHelper = false
+    @Published private(set) var helperSettingsMessage: String?
     private let scanner = DispatchQueue(label: "SSDProtect.Inventory", qos: .utility)
     private var revision = 0
     @Published private(set) var scanning = false
@@ -67,7 +69,7 @@ final class MenuModel: ObservableObject {
 
     func changeProtection(_ target: APFSProtectionTarget, enabled: Bool) {
         finderUpdateMessage = nil
-        if FinderHelper.service.status == .enabled, target.encryptedIdentity != nil {
+        if !disablingFinderHelper, FinderHelper.service.status == .enabled, target.encryptedIdentity != nil {
             guard let request = beginFinderUpdate(target) else { return }
             arbitrator.protect(target, enabled: enabled) { [weak self] applied in
                 guard let self, self.finderRequests[target.id] == request else { return }
@@ -99,7 +101,7 @@ final class MenuModel: ObservableObject {
     }
 
     private func beginFinderUpdate(_ target: APFSProtectionTarget) -> UUID? {
-        guard finderRequests[target.id] == nil, !inventory.busy else { return nil }
+        guard !disablingFinderHelper, finderRequests[target.id] == nil, !inventory.busy else { return nil }
         let request = UUID()
         finderRequests[target.id] = request
         finderUpdateMessage = nil
@@ -130,6 +132,84 @@ final class MenuModel: ObservableObject {
                 self.refresh()
             }
         }
+    }
+
+    func disableFinderHelper(_ registration: LoginItem) {
+        guard !disablingFinderHelper, finderRequests.isEmpty else { return }
+        helperSettingsMessage = nil
+        guard registration.status == .enabled else {
+            registration.setRequested(false)
+            refresh()
+            return
+        }
+        disablingFinderHelper = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let scan = Result {
+                try DriveInventory.read().compactMap(\.apfsTarget).filter { $0.encryptedFinderFlag == true }
+            }
+            DispatchQueue.main.async {
+                switch scan {
+                case .failure(let error):
+                    self.finishFinderDisable(registration, error: error)
+                case .success(let targets):
+                    guard !targets.isEmpty else {
+                        self.finishFinderDisable(registration, error: nil)
+                        return
+                    }
+                    // A volume may already have carried this flag before SSD Protect ran.
+                    // Name every affected mount and let the user decline the changes.
+                    let alert = NSAlert()
+                    alert.messageText = "Restore Finder Eject before disabling the helper?"
+                    alert.informativeText = targets.compactMap { $0.encryptedFinderVolume?.path }.sorted().joined(separator: "\n")
+                        + "\n\nThese mounted encrypted volumes have the Finder flag set. Ordinary protection stays active."
+                    alert.addButton(withTitle: "Restore and Disable")
+                    alert.addButton(withTitle: "Cancel")
+                    alert.addButton(withTitle: "Disable Only")
+                    switch alert.runModal() {
+                    case .alertFirstButtonReturn:
+                        self.restoreBeforeDisabling(targets, registration: registration)
+                    case .alertThirdButtonReturn:
+                        self.finishFinderDisable(registration, error: nil)
+                    default:
+                        self.disablingFinderHelper = false
+                    }
+                }
+            }
+        }
+    }
+
+    private func restoreBeforeDisabling(_ targets: [APFSProtectionTarget], registration: LoginItem) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result {
+                for target in targets { try FinderHelper.request(target, set: false) }
+            }
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    self.offersFinderRelaunch = true
+                    self.finderUpdateMessage = "Finder mount flags cleared. Relaunch Finder to refresh its Eject controls."
+                    self.finishFinderDisable(registration, error: nil)
+                case .failure(let error):
+                    self.finishFinderDisable(registration, error: error)
+                }
+            }
+        }
+    }
+
+    private func finishFinderDisable(_ registration: LoginItem, error: Error?) {
+        disablingFinderHelper = false
+        if let error {
+            let alert = NSAlert()
+            alert.messageText = "Couldn’t verify Finder Eject on every volume."
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "Keep Helper Enabled")
+            alert.addButton(withTitle: "Disable Only")
+            if alert.runModal() == .alertSecondButtonReturn { registration.setRequested(false) }
+        } else {
+            registration.setRequested(false)
+            if offersFinderRelaunch { helperSettingsMessage = "Relaunch Finder from the SSD Protect menu to refresh its Eject controls." }
+        }
+        refresh()
     }
 
     func confirmFinderRelaunch() {
@@ -224,7 +304,7 @@ private struct ProtectionSettings: View {
     let appIcons: AppIconSettings
 
     var body: some View {
-        AppSettings(restoresProtection: Binding(
+        AppSettings(model: model, restoresProtection: Binding(
             get: { model.inventory.restoresProtection },
             set: model.arbitrator.setRestoresProtection
         ), sessionOnlyCount: model.inventory.sessionOnly.count, appIcons: appIcons)
@@ -413,7 +493,7 @@ struct DriveMenu: View {
                         .disabled(controlsUnavailable)
                 }
             }
-            if hideEncryptedFinderEject, let target = row.apfsTarget, let set = model.finderFlags[target.id],
+            if !model.disablingFinderHelper, hideEncryptedFinderEject, let target = row.apfsTarget, let set = model.finderFlags[target.id],
                model.inventory.protected.contains(target.id) != set {
                 Button("Retry Finder Update") {
                     model.updateFinderFlag(target, set: !set)
