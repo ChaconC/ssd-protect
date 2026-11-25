@@ -114,7 +114,7 @@ public final class Arbitrator {
     private var byBSD = Attachments()
     private var policy = Protection()
     private var apfsPermit: APFSEjectPermit?
-    private var active: UUID?
+    private var active: (token: UUID, drive: UInt64)?
     private var uncertain: Set<UInt64> = []
     private var message = ""
     private var started = false
@@ -132,7 +132,6 @@ public final class Arbitrator {
     private var restoration: RestoreRules
     private var pendingSaves: Set<UInt64> = []
     private var pendingRemovals: Set<UInt64> = []
-    private var restored: Set<UInt64> = []
 
     public convenience init(restorationDefaults: UserDefaults? = nil, topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
         self.init(testImageID: nil, restorationDefaults: restorationDefaults, topologyChanged: topologyChanged, update: update)
@@ -243,7 +242,6 @@ public final class Arbitrator {
             guard self.restoration.enabled != enabled else { return }
             self.topologyRevision &+= 1
             self.restoration.setEnabled(enabled)
-            self.restored.removeAll()
             self.pendingRemovals.removeAll()
             self.pendingSaves = enabled ? self.policy.enrolled.union(self.enrollments.roots.keys) : []
             self.scheduleRecheck(after: 0)
@@ -256,14 +254,12 @@ public final class Arbitrator {
         topologyRevision &+= 1
         pendingRemovals.remove(id)
         pendingSaves.insert(id)
-        restored.remove(id)
         scheduleRecheck(after: 0)
     }
 
     private func removeSelection(_ id: UInt64) {
         topologyRevision &+= 1
         pendingSaves.remove(id)
-        restored.remove(id)
         if restoration.enabled, restoration.bindings[id] == nil, restoration.hasChoices {
             pendingRemovals.insert(id)
         }
@@ -274,7 +270,6 @@ public final class Arbitrator {
     private func clearAttachment(_ id: UInt64) {
         pendingSaves.remove(id)
         pendingRemovals.remove(id)
-        restored.remove(id)
         restoration.disconnected(id)
     }
 
@@ -289,29 +284,20 @@ public final class Arbitrator {
             if let id = row.attachment, let identity = row.identity { evidence[id] = identity }
         }
         restoration.discardCollisions(in: evidence)
-        let eligible = Set(rows.compactMap { $0.restoreTarget == nil ? nil : $0.attachment })
-        for id in restored {
-            if restoration.bindings[id] == nil {
-                // The saved identity collided. Revoke any automatically armed veto.
-                enrollments.remove(id)
-                policy.enrolled.remove(id)
-                restored.remove(id)
-            } else if active == nil && (!eligible.contains(id) || !restoration.matches(id, evidence: evidence)) {
-                if enrollments.roots[id] != nil {
-                    // Keep the suspended row switchable while the same attachment is present.
-                    enrollments.verified.removeValue(forKey: id)
-                } else {
-                    policy.enrolled.remove(id)
-                    restoration.disconnected(id)
-                    restored.remove(id)
-                }
-            }
+        // Revalidate the physical attachment after the asynchronous scan, including
+        // unmounted leaves whose previously armed rule can outlive their mount path.
+        let liveRows = rows.filter { row in
+            guard let id = row.attachment, let root = DADiskCreateFromBSDName(nil, session, row.id) else { return false }
+            return Media.attachmentID(root) == id
         }
+        var targets: [UInt64: RestoreTarget] = [:]
+        for row in liveRows {
+            if let id = row.attachment { targets[id] = row.restoreTarget }
+        }
+        restoration.recheckRestored(targets, evidence: evidence, ejecting: active?.drive, leaf: &policy, apfs: &enrollments)
 
-        for row in rows {
-            guard let id = row.attachment,
-                  let root = DADiskCreateFromBSDName(nil, session, row.id),
-                  Media.attachmentID(root) == id else { continue }
+        for row in liveRows {
+            guard let id = row.attachment else { continue }
             if pendingRemovals.contains(id) {
                 guard evidence[id]?.isUnique(in: evidence) == true else { continue }
                 pendingRemovals.remove(id)
@@ -330,6 +316,7 @@ public final class Arbitrator {
                   enrollments.roots[id] == nil, !policy.enrolled.contains(id),
                   restoration.matches(id, evidence: evidence) else { continue }
             switch target {
+            case .unmountedLeaf: continue // Only an already armed attachment can retain its veto.
             case .leaf(let drive):
                 guard drives[id] == drive, byBSD[row.id] == id, fresh(drive)?.drive == drive else { continue }
                 policy.enrolled.insert(id)
@@ -337,8 +324,7 @@ public final class Arbitrator {
                 enrollments.enroll(apfs)
                 rememberMembers(of: apfs)
             }
-            restored.insert(id)
-            restoration.record(id, evidence: evidence)
+            restoration.bindRestored(id, evidence: evidence)
         }
         // An explicit choice with insufficient or duplicate identity is session-only.
         pendingSaves.removeAll()
@@ -479,10 +465,10 @@ public final class Arbitrator {
                 return
             }
             let token = UUID()
-            self.active = token
+            self.active = (token, target.id)
             self.report("Verifying APFS drive before eject…")
             self.queue.asyncAfter(deadline: .now() + 60) {
-                guard self.active == token else { return }
+                guard self.active?.token == token else { return }
                 self.uncertain.insert(target.id)
                 self.finish("Eject timed out. Check mount state and reconnect before retrying.")
             }
@@ -496,7 +482,7 @@ public final class Arbitrator {
             let rows = try? DriveInventory.read(testImageID: self.testImageID)
             let row = rows?.first { $0.attachment == expected.id }
             self.queue.async { [self] in
-                guard self.active == token else { return }
+                guard self.active?.token == token else { return }
                 guard self.topologyRevision == revision else {
                     self.advanceAPFSEject(expected: expected, unmountOptions: unmountOptions, token: token)
                     return
@@ -517,7 +503,7 @@ public final class Arbitrator {
                 let phase: Phase = nextVolume == nil ? .eject : .unmount
                 self.apfsPermit = APFSEjectPermit(root: expected.id, member: member, phase: phase)
                 let reply = Reply { [weak self] dissent in
-                    guard let self, self.active == token else { return }
+                    guard let self, self.active?.token == token else { return }
                     self.apfsPermit = nil
                     if let dissent {
                         self.reconcileAPFSFailure(expected, phase: phase, dissent: dissent, token: token)
@@ -547,7 +533,7 @@ public final class Arbitrator {
             let rows = try? DriveInventory.read(testImageID: self.testImageID)
             let current = rows?.first { $0.attachment == target.id }?.apfsTarget
             self.queue.async {
-                guard self.active == token else { return }
+                guard self.active?.token == token else { return }
                 let status: String
                 if let current {
                     let paths = current.mountedVolumes.values.map(\.path).sorted()
@@ -578,16 +564,16 @@ public final class Arbitrator {
                 return
             }
             let token = UUID()
-            self.active = token
+            self.active = (token, target.id)
             self.policy.operation = (target.id, .unmount)
             self.report("Unmounting \(target.name)…")
             self.queue.asyncAfter(deadline: .now() + 30) {
-                guard self.active == token else { return }
+                guard self.active?.token == token else { return }
                 self.uncertain.insert(target.id)
                 self.finish("Operation timed out. Check mount state and reconnect before retrying.")
             }
             let reply = Reply { [weak self] dissent in
-                guard let self, self.active == token else { return }
+                guard let self, self.active?.token == token else { return }
                 if let dissent { self.failed("Unmount", dissent); return }
                 guard self.policy.operation?.drive == target.id,
                       let unmounted = self.fresh(target), unmounted.transport == target.transport,
@@ -598,7 +584,7 @@ public final class Arbitrator {
                 self.policy.operation = (target.id, .eject)
                 self.report("Ejecting \(target.name)…")
                 let reply = Reply { [weak self] dissent in
-                    guard let self, self.active == token else { return }
+                    guard let self, self.active?.token == token else { return }
                     if let dissent { self.failed("Eject", dissent) }
                     else { self.finish("Ejected \(target.name).") }
                 }

@@ -71,6 +71,54 @@ final class RestoreRulesTests: XCTestCase {
         XCTAssertFalse(RestoreRules(defaults: defaults).matches(3, evidence: [3: original]))
     }
 
+    func testFailedEjectLeavesUnmountedRestoredLeafProtectedUntilDisconnection() {
+        var rules = RestoreRules(defaults: defaults)
+        rules.setEnabled(true)
+        rules.record(10, evidence: [10: original])
+        rules.bindRestored(10, evidence: [10: original])
+        var leaf = Protection()
+        var apfs = APFSEnrollments()
+        leaf.enrolled.insert(10)
+        leaf.operation = (10, .unmount)
+        // Unmount succeeded. Only the intentional eject has a permit.
+        leaf.operation = (10, .eject)
+        XCTAssertFalse(leaf.veto(10, .eject))
+        // macOS declined eject. The physical attachment remains, but the
+        // mounted filesystem UUID is no longer available to the verifier.
+        leaf.operation = nil
+        rules.recheckRestored([10: .unmountedLeaf], evidence: [10: .init(device: original.device, media: nil)],
+                              ejecting: nil, leaf: &leaf, apfs: &apfs)
+        XCTAssertTrue(leaf.veto(10, .eject))
+        XCTAssertNotNil(rules.bindings[10])
+        rules.recheckRestored([11: .unmountedLeaf], evidence: [11: original],
+                              ejecting: nil, leaf: &leaf, apfs: &apfs)
+        XCTAssertFalse(leaf.veto(10, .eject))
+        XCTAssertFalse(leaf.veto(11, .eject))
+        XCTAssertTrue(rules.hasChoices)
+    }
+
+    func testEjectingOneDriveDoesNotMaskAnotherRestoredDrivesMissingIdentity() {
+        var rules = RestoreRules(defaults: defaults)
+        rules.setEnabled(true)
+        let evidence: [UInt64: IdentityEvidence] = [1: original, 2: other]
+        var leaf = Protection()
+        var apfs = APFSEnrollments()
+        var targets: [UInt64: RestoreTarget] = [:]
+        for (id, bsd) in [(UInt64(1), "first"), (2, "second")] {
+            rules.record(id, evidence: evidence)
+            rules.bindRestored(id, evidence: evidence)
+            let target = APFSProtectionTarget(id: id, wholeBSD: bsd, members: [bsd: id], containers: [])
+            apfs.enroll(target)
+            apfs.recheck(id, live: id, target: target)
+            targets[id] = .apfs(target)
+        }
+        let partial: [UInt64: IdentityEvidence] = [1: original, 2: .init(device: nil, media: other.media)]
+        rules.recheckRestored(targets, evidence: partial, ejecting: 1, leaf: &leaf, apfs: &apfs)
+        XCTAssertEqual(Set(apfs.verified.keys), [1])
+        XCTAssertEqual(apfs.suspended, [2])
+        XCTAssertNotNil(rules.bindings[2])
+    }
+
     func testDisableAndGlobalOptOutClearSavedChoices() {
         var rules = RestoreRules(defaults: defaults)
         rules.setEnabled(true)

@@ -5,6 +5,7 @@ import IOKit
 
 enum RestoreTarget {
     case leaf(Drive)
+    case unmountedLeaf
     case apfs(APFSProtectionTarget)
 }
 
@@ -40,6 +41,10 @@ extension DriveInventory {
         if let leaf = whole.drive, device.partitions?.isEmpty != false, row.reason == .unsupported {
             mediaID = uuid(in: whole, key: kDADiskDescriptionVolumeUUIDKey)
             target = .leaf(leaf)
+        } else if row.reason == .unmounted, whole.transport != nil, device.partitions?.isEmpty != false,
+                  whole.description[kDADiskDescriptionVolumePathKey] == nil {
+            mediaID = uuid(in: whole, key: kDADiskDescriptionVolumeUUIDKey)
+            target = .unmountedLeaf
         } else {
             // A single APFS store supplies the persistent media UUID. Its BSD
             // name alone cannot establish that this partition belongs to the root.
