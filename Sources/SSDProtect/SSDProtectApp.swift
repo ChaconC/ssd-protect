@@ -269,10 +269,10 @@ struct DriveMenu: View {
                         Button {
                             model.arbitrator.remount(target, named: row.name)
                         } label: {
-                            if target.singleVolumeLocked { Label("Mount…", systemImage: "lock.fill") }
+                            if target.singleVolumeLocked { Label("Unlock", systemImage: "lock.fill") }
                             else { Text("Mount") }
                         }
-                            .accessibilityLabel(target.singleVolumeLocked ? "Unlock and mount \(row.name)" : "Mount \(row.name)")
+                            .accessibilityLabel(target.singleVolumeLocked ? "Unlock \(row.name)" : "Mount \(row.name)")
                             .disabled(controlsUnavailable)
                     } else {
                         Button("Eject…") { model.confirm(target, named: row.name) }.disabled(controlsUnavailable)
