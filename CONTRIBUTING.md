@@ -3,6 +3,10 @@
 Start a topic branch from current `main`. External contributors can push their
 branch to a fork. Keep each pull request focused on one change.
 
+Use Conventional Commits for commit subjects and PR titles, for example
+`feat(inventory): show mounted volumes` or `fix(eject): reject stale confirmations`.
+Use the PR title as the squash commit subject when merging.
+
 Stage your changes and run the same checks used in CI from the root:
 
 ```sh
