@@ -162,7 +162,6 @@ private struct DriveMenu: View {
     let requestQuit: (NSWindow) -> Void
     @StateObject private var option = OptionKey()
     @State private var showsSimulatorImages = false
-    @State private var listHeight: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -171,44 +170,12 @@ private struct DriveMenu: View {
                 Text(warning).foregroundStyle(.secondary)
             }
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    let rows = inventoryRows
-                    let simulators = rows.filter { $0.kind == .simulatorImage }
-                    ForEach(model.inventory.drives) { drive in
-                        DriveRow(icon: drive.icon, name: drive.name) {
-                            Text(drive.transport)
-                            restorationNote(for: drive.id)
-                        } actions: {
-                            DriveActions(name: drive.name, protected: Binding(
-                                get: { model.inventory.protected.contains(drive.id) },
-                                set: { model.arbitrator.protect(drive, enabled: $0) }
-                            ), optionDown: option.isDown, eject: { model.confirm(drive) },
-                               forceEject: { model.arbitrator.forceEject(drive) })
-                        }.disabled(controlsUnavailable)
-                    }
-                    ForEach(rows.filter { $0.kind != .simulatorImage }) { row in
-                        inventoryRow(row)
-                    }
-                    if !simulators.isEmpty {
-                        DisclosureGroup("Simulator disk images (\(simulators.count))", isExpanded: $showsSimulatorImages) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                ForEach(simulators) { row in inventoryRow(row) }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, 4)
-                        }
-                    }
-                    if let message = model.scanMessage {
-                        Text(message).foregroundStyle(.secondary)
-                    } else if rows.isEmpty && model.inventory.drives.isEmpty {
-                        Text("No drives to show.").foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
+            ViewThatFits(in: .vertical) {
+                driveList.fixedSize(horizontal: false, vertical: true)
+                ScrollView { driveList }.frame(height: 370)
             }
-            .frame(height: min(370, max(1, listHeight)))
+            .frame(maxHeight: 370)
+            .fixedSize(horizontal: false, vertical: true)
             if !model.inventory.message.isEmpty {
                 Text(model.inventory.message)
                     .font(.callout)
@@ -228,11 +195,65 @@ private struct DriveMenu: View {
         }
         .padding()
         .frame(width: 340)
+        .fixedSize(horizontal: false, vertical: true)
+        .background {
+            GeometryReader { geometry in MenuWindowSizing(height: geometry.size.height) }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .onAppear {
             option.start()
             model.refresh()
         }
         .onDisappear { option.stop() }
+    }
+
+    private var driveList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            let rows = inventoryRows
+            let simulators = rows.filter { $0.kind == .simulatorImage }
+            ForEach(model.inventory.drives) { drive in
+                DriveRow(icon: drive.icon, name: drive.name) {
+                    Text(drive.transport)
+                    restorationNote(for: drive.id)
+                } actions: {
+                    DriveActions(name: drive.name, protected: Binding(
+                        get: { model.inventory.protected.contains(drive.id) },
+                        set: { model.arbitrator.protect(drive, enabled: $0) }
+                    ), optionDown: option.isDown, eject: { model.confirm(drive) },
+                       forceEject: { model.arbitrator.forceEject(drive) })
+                }.disabled(controlsUnavailable)
+            }
+            ForEach(rows.filter { $0.kind != .simulatorImage }) { row in
+                inventoryRow(row)
+            }
+            if !simulators.isEmpty {
+                Button {
+                    showsSimulatorImages.toggle()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: showsSimulatorImages ? "chevron.down" : "chevron.right")
+                            .font(.caption.bold())
+                            .frame(width: 12)
+                        Text("Simulator disk images (\(simulators.count))")
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(showsSimulatorImages ? "Expanded" : "Collapsed")
+                if showsSimulatorImages {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(simulators) { row in inventoryRow(row) }
+                    }
+                    .padding(.leading, 17)
+                }
+            }
+            if let message = model.scanMessage {
+                Text(message).foregroundStyle(.secondary)
+            } else if rows.isEmpty && model.inventory.drives.isEmpty {
+                Text("No drives to show.").foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var controlsUnavailable: Bool { model.inventory.busy || model.inventory.available != true }
