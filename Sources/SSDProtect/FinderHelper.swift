@@ -82,13 +82,45 @@ final class FinderHelper: NSObject, NSXPCListenerDelegate, FinderMountService {
         connection.remoteObjectInterface = NSXPCInterface(with: FinderMountService.self)
         connection.resume()
         defer { connection.invalidate() }
-        var result: Result<Void, Error> = .failure(Failure("The Finder helper didn’t reply."))
-        let proxy = connection.synchronousRemoteObjectProxyWithErrorHandler { result = .failure($0) }
+        try request(connection, attachment: target.id, member: identity.member, volume: identity.volume,
+                    set: set, timeout: 15)
+    }
+
+    static func request(_ connection: NSXPCConnection, attachment: UInt64, member: UInt64,
+                        volume: UUID, set: Bool, timeout: TimeInterval) throws {
+        let reply = PendingReply()
+        let proxy = connection.remoteObjectProxyWithErrorHandler { reply.finish(.failure($0)) }
         guard let helper = proxy as? FinderMountService else { throw Failure("Couldn’t connect to the Finder helper.") }
-        helper.update(attachment: target.id, member: identity.member, volume: identity.volume.uuidString, set: set) { message in
-            if let message { result = .failure(Failure(message)) } else { result = .success(()) }
+        helper.update(attachment: attachment, member: member, volume: volume.uuidString, set: set) { message in
+            if let message { reply.finish(.failure(Failure(message))) } else { reply.finish(.success(())) }
         }
-        try result.get()
+        try reply.wait(timeout: timeout)
+    }
+
+    // Each XPC call owns its reply. A late reply cannot complete a subsequent call.
+    private final class PendingReply {
+        private let condition = NSCondition()
+        private var result: Result<Void, Error>?
+
+        func finish(_ value: Result<Void, Error>) {
+            condition.lock()
+            defer { condition.unlock() }
+            guard result == nil else { return }
+            result = value
+            condition.signal()
+        }
+
+        func wait(timeout: TimeInterval) throws {
+            let deadline = Date(timeIntervalSinceNow: timeout)
+            condition.lock()
+            defer { condition.unlock() }
+            while result == nil {
+                if !condition.wait(until: deadline), result == nil {
+                    throw Failure("The Finder helper timed out. The mount state is unverified.")
+                }
+            }
+            try result?.get()
+        }
     }
 
     private struct Failure: LocalizedError {

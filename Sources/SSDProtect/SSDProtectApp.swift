@@ -7,7 +7,8 @@ final class MenuModel: ObservableObject {
     @Published var inventory = Inventory()
     @Published var rows: [InventoryRow] = []
     @Published var scanMessage: String? = "Reading drive inventory…"
-    @Published var updatingFinderFlag = false
+    @Published private(set) var finderFlags: [UInt64: Bool] = [:]
+    @Published private(set) var finderRequests: [UInt64: UUID] = [:]
     @Published var finderUpdateMessage: String?
     @Published var offersFinderRelaunch = false
     private let scanner = DispatchQueue(label: "SSDProtect.Inventory", qos: .utility)
@@ -36,15 +37,26 @@ final class MenuModel: ObservableObject {
             guard self.revision == requested, !self.scanning else { return }
             self.scanning = true
             self.scanner.async {
-                let result = Result { try DriveInventory.read() }
+                let result = Result {
+                    let rows = try DriveInventory.read()
+                    var flags: [UInt64: Bool] = [:]
+                    if FinderHelper.service.status == .enabled {
+                        for target in rows.compactMap(\.apfsTarget) {
+                            flags[target.id] = target.encryptedFinderFlag
+                        }
+                    }
+                    return (rows, flags)
+                }
                 DispatchQueue.main.async {
                     self.scanning = false
                     guard self.revision == requested else { self.refresh(); return }
                     switch result {
-                    case .success(let rows):
+                    case .success(let (rows, flags)):
+                        self.finderFlags = flags
                         self.rows = rows
                         self.scanMessage = nil
                     case .failure:
+                        self.finderFlags = [:]
                         self.rows = []
                         self.scanMessage = "Drive inventory unavailable."
                     }
@@ -55,16 +67,14 @@ final class MenuModel: ObservableObject {
 
     func changeProtection(_ target: APFSProtectionTarget, enabled: Bool) {
         if FinderHelper.service.status == .enabled,
-           let current = target.encryptedFinderFlag, current != enabled {
-            guard !updatingFinderFlag, !inventory.busy else { return }
-            updatingFinderFlag = true
-            finderUpdateMessage = nil
+           let current = finderFlags[target.id], current != enabled {
+            guard let request = beginFinderUpdate(target) else { return }
             arbitrator.protect(target, enabled: enabled) { [weak self] applied in
-                guard let self else { return }
+                guard let self, self.finderRequests[target.id] == request else { return }
                 if applied {
-                    self.performFinderUpdate(target, set: enabled)
+                    self.performFinderUpdate(target, set: enabled, request: request)
                 } else {
-                    self.updatingFinderFlag = false
+                    self.finderRequests[target.id] = nil
                 }
             }
             return
@@ -84,18 +94,32 @@ final class MenuModel: ObservableObject {
     }
 
     func updateFinderFlag(_ target: APFSProtectionTarget, set: Bool) {
-        guard !updatingFinderFlag, !inventory.busy else { return }
-        updatingFinderFlag = true
-        finderUpdateMessage = nil
-        performFinderUpdate(target, set: set)
+        guard let request = beginFinderUpdate(target) else { return }
+        performFinderUpdate(target, set: set, request: request)
     }
 
-    private func performFinderUpdate(_ target: APFSProtectionTarget, set: Bool) {
-        guard let path = target.encryptedFinderVolume else { updatingFinderFlag = false; return }
+    private func beginFinderUpdate(_ target: APFSProtectionTarget) -> UUID? {
+        guard finderRequests[target.id] == nil, !inventory.busy else { return nil }
+        let request = UUID()
+        finderRequests[target.id] = request
+        finderUpdateMessage = nil
+        // Enrollment and service discovery happen before the XPC reply deadline starts.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+            guard self.finderRequests[target.id] == request else { return }
+            self.finderRequests[target.id] = nil
+            self.finderUpdateMessage = "Finder update timed out. The mount state is unverified."
+            self.refresh()
+        }
+        return request
+    }
+
+    private func performFinderUpdate(_ target: APFSProtectionTarget, set: Bool, request: UUID) {
+        guard let path = target.encryptedFinderVolume else { finderRequests[target.id] = nil; return }
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Result { try FinderHelper.request(target, set: set) }
             DispatchQueue.main.async {
-                self.updatingFinderFlag = false
+                guard self.finderRequests[target.id] == request else { return }
+                self.finderRequests[target.id] = nil
                 switch result {
                 case .success:
                     self.offersFinderRelaunch = true
@@ -247,7 +271,7 @@ struct DriveMenu: View {
             }
             if model.offersFinderRelaunch {
                 Button("Relaunch Finder…", action: model.confirmFinderRelaunch)
-                    .disabled(model.updatingFinderFlag)
+                    .disabled(!model.finderRequests.isEmpty)
             }
             if !model.inventory.message.isEmpty {
                 Text(model.inventory.message)
@@ -325,7 +349,7 @@ struct DriveMenu: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var controlsUnavailable: Bool { model.updatingFinderFlag || model.inventory.busy || model.inventory.available != true }
+    private var controlsUnavailable: Bool { model.inventory.busy || model.inventory.available != true }
 
     private var inventoryRows: [InventoryRow] {
         let eligible = Set(model.inventory.drives.map(\.id))
@@ -335,6 +359,7 @@ struct DriveMenu: View {
     }
 
     private func inventoryRow(_ row: InventoryRow) -> some View {
+        let controlsUnavailable = self.controlsUnavailable || row.attachment.flatMap { model.finderRequests[$0] } != nil
         let suspended = row.attachment.flatMap { model.inventory.suspendedAPFS.contains($0) ? $0 : nil }
         return VStack(alignment: .leading, spacing: 4) {
             DriveRow(icon: row.icon, name: row.name) {
@@ -381,8 +406,8 @@ struct DriveMenu: View {
                         .disabled(controlsUnavailable)
                 }
             }
-            if let target = row.apfsTarget, let set = target.encryptedFinderFlag,
-               hideEncryptedFinderEject && model.inventory.protected.contains(target.id) != set {
+            if hideEncryptedFinderEject, let target = row.apfsTarget, let set = model.finderFlags[target.id],
+               model.inventory.protected.contains(target.id) != set {
                 Button(set ? "Restore Finder Eject…" : "Hide Finder Eject…") {
                     model.updateFinderFlag(target, set: !set)
                 }

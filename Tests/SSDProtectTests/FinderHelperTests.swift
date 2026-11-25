@@ -12,6 +12,28 @@ final class FinderHelperTests: XCTestCase {
         try exerciseConnection(matching: false)
     }
 
+    func testUnansweredRequestTimesOutAndNextRequestHasItsOwnReply() throws {
+        let listener = NSXPCListener.anonymous()
+        let delegate = Probe()
+        let received = expectation(description: "Helper accepted the stalled call")
+        delegate.onStall = { received.fulfill() }
+        listener.delegate = delegate
+        listener.resume()
+        defer { listener.invalidate() }
+        let connection = NSXPCConnection(listenerEndpoint: listener.endpoint)
+        connection.remoteObjectInterface = NSXPCInterface(with: FinderMountService.self)
+        connection.resume()
+        defer { connection.invalidate() }
+        try withExtendedLifetime(delegate) {
+            XCTAssertThrowsError(try FinderHelper.request(connection, attachment: 1, member: 2,
+                                                          volume: UUID(), set: false, timeout: 0.2)) {
+                XCTAssertTrue($0.localizedDescription.contains("timed out"))
+            }
+            wait(for: [received], timeout: 2)
+            try FinderHelper.request(connection, attachment: 1, member: 2, volume: UUID(), set: true, timeout: 2)
+        }
+    }
+
     private func exerciseConnection(matching: Bool) throws {
         let listener = NSXPCListener.anonymous()
         let delegate = Probe()
@@ -40,6 +62,9 @@ final class FinderHelperTests: XCTestCase {
     }
 
     private final class Probe: NSObject, NSXPCListenerDelegate, FinderMountService {
+        var onStall: (() -> Void)?
+        private var stalled: ((String?) -> Void)?
+
         func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
             connection.exportedInterface = NSXPCInterface(with: FinderMountService.self)
             connection.exportedObject = self
@@ -48,6 +73,16 @@ final class FinderHelperTests: XCTestCase {
         }
 
         func update(attachment: UInt64, member: UInt64, volume: String, set: Bool, reply: @escaping (String?) -> Void) {
+            if let onStall {
+                if set {
+                    stalled?("Late error")
+                    reply(nil)
+                } else {
+                    stalled = reply
+                    onStall()
+                }
+                return
+            }
             reply("\(attachment)/\(member)/\(volume)/\(set)")
         }
     }
