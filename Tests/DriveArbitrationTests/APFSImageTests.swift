@@ -13,8 +13,8 @@ private final class DiskReply {
 
 final class APFSImageTests: XCTestCase {
     // Supply the exact mount path of one volume on a disposable, two-volume GPT/APFS image.
-    // The test remounts the unprotected volume so the same fixture can be used again.
-    func testProtectionVetoesBothMountedSiblingsUntilDisabled() throws {
+    // The test ends by ejecting the image. Reattach it before running the test again.
+    func testProtectionVetoesSiblingsAndSurvivesBusyConfirmedEject() throws {
         guard let path = ProcessInfo.processInfo.environment["SSD_PROTECT_TEST_APFS_IMAGE"] else {
             throw XCTSkip("Set SSD_PROTECT_TEST_APFS_IMAGE to a disposable APFS image volume's mount path.")
         }
@@ -138,10 +138,85 @@ final class APFSImageTests: XCTestCase {
             return XCTFail("Could not remount the disposable APFS volume.")
         }
         XCTAssertEqual(try Media.attachmentID(verifiedDisk(at: mount, bsd: volumeBSD)), volumeID)
+
+        func currentTarget() throws -> APFSProtectionTarget {
+            let current = try XCTUnwrap(DriveInventory.read(testImageID: imageID).first { $0.attachment == imageID })
+            return try XCTUnwrap(current.apfsTarget)
+        }
+        let confirmed = try currentTarget()
+        let expectedMounts = Dictionary(uniqueKeysWithValues: mounts.map { ($0.1, $0.0) })
+        guard confirmed.mountedVolumes.mapValues(\.path) == expectedMounts else {
+            return XCTFail("Confirmation must include both verified image mounts.")
+        }
+        service.protect(confirmed, enabled: true)
+        guard waitUntil({ state.protected.contains(imageID) }) else {
+            return XCTFail("Could not re-enroll the disposable image. \(state.message)")
+        }
+
+        // Hold the last volume so a normal eject can partially unmount the image.
+        let (busyPath, busyBSD) = try XCTUnwrap(mounts.max { $0.1 < $1.1 })
+        _ = try verifiedDisk(at: busyPath, bsd: busyBSD)
+        let holder = Process()
+        holder.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        holder.arguments = ["120"]
+        holder.currentDirectoryURL = URL(fileURLWithPath: busyPath, isDirectory: true)
+        try holder.run()
+        defer {
+            if holder.isRunning {
+                holder.terminate()
+                holder.waitUntilExit()
+            }
+        }
+        service.ejectConfirmed(confirmed)
+        guard waitUntil(timeout: 35, { !state.busy && state.message.contains("drive is busy") }) else {
+            return XCTFail("Expected the confirmed normal unmount to report busy. \(state.message)")
+        }
+        let busyMessage = state.message
+        XCTAssertTrue(state.protected.contains(imageID))
+        holder.terminate()
+        holder.waitUntilExit()
+
+        // A whole-volume request may have already unmounted the non-busy sibling.
+        // Check the veto after releasing the holder so busy cannot explain the rejection.
+        let protectedDisk = try verifiedDisk(at: busyPath, bsd: busyBSD)
+        let denied = DiskReply()
+        DADiskUnmount(protectedDisk, 0, DiskReply.callback, Unmanaged.passRetained(denied).toOpaque())
+        guard waitUntil({ denied.status != nil && state.message.contains("Blocked an ordinary unmount") }),
+              denied.status == Int32(truncatingIfNeeded: kDAReturnNotPermitted) else {
+            return XCTFail("Ordinary unmount must still be vetoed after a busy failure. \(state.message)")
+        }
+        _ = try verifiedDisk(at: busyPath, bsd: busyBSD)
+
+        var remainingMounts: [String: String] = [:]
+        for (path, name) in mounts {
+            let sibling = try XCTUnwrap(DADiskCreateFromBSDName(nil, session, name))
+            let media = try XCTUnwrap(Media(sibling))
+            guard media.id == confirmed.members[name] else { return XCTFail("The image attachment changed.") }
+            if media.description[kDADiskDescriptionVolumePathKey] != nil {
+                _ = try verifiedDisk(at: path, bsd: name)
+                XCTAssertTrue(busyMessage.contains(path), "Busy result omitted a mounted volume.")
+                remainingMounts[name] = path
+            }
+        }
+        let retry = try currentTarget()
+        guard retry.mountedVolumes.mapValues(\.path) == remainingMounts,
+              remainingMounts[busyBSD] == busyPath else {
+            return XCTFail("The retry confirmation did not describe the current mounted volumes.")
+        }
+        service.ejectConfirmed(retry)
+        guard waitUntil(timeout: 35, { !state.busy && state.message.hasPrefix("Ejected ") }) else {
+            return XCTFail("Expected a confirmed eject after closing the busy directory. \(state.message)")
+        }
+        XCTAssertTrue(waitUntil {
+            DADiskCreateFromBSDName(nil, session, bsd).flatMap(Media.attachmentID) != imageID
+        }, "The physical image attachment remained present after eject.")
+        for (path, _) in mounts {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path), "An image mount remained after eject.")
+        }
     }
 
-    private func waitUntil(_ predicate: () -> Bool) -> Bool {
-        let deadline = Date().addingTimeInterval(10)
+    private func waitUntil(timeout: TimeInterval = 10, _ predicate: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
         while !predicate() && Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.02))
         }

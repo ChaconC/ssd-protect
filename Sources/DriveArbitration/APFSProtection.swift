@@ -8,6 +8,7 @@ public struct APFSProtectionTarget: Equatable {
     let wholeBSD: String
     var members: [String: UInt64]
     let containers: Set<UInt64>
+    public internal(set) var mountedVolumes: [String: URL] = [:]
 
     func covers(_ bsd: String, observed: UInt64?) -> Bool {
         guard let observed else { return false }
@@ -26,10 +27,10 @@ public struct APFSProtectionTarget: Equatable {
             guard !stores.isDisjoint(with: partitions) else { continue }
             // Multi-store containers and boot containers cannot be claimed by one drive.
             guard stores.count == 1, container.id != startupWhole,
-                  (container.volumes ?? []).allSatisfy({ $0.mount != "/" }) else { return nil }
+                  let volumes = container.volumes, volumes.allSatisfy({ $0.mount != "/" }) else { return nil }
             attachedStores.formUnion(stores)
             names.insert(container.id)
-            names.formUnion((container.volumes ?? []).map(\.id))
+            names.formUnion(volumes.map(\.id))
         }
         // An APFS partition missing its container makes the mapping incomplete.
         let declaredStores = physical.filter { $0.content?.hasPrefix("Apple_APFS") == true }
@@ -52,13 +53,19 @@ public struct APFSProtectionTarget: Equatable {
                   ["USB", "Thunderbolt", "PCI-Express", "FireWire"].contains(bus) else { return nil }
         }
         var members: [String: UInt64] = [:]
+        var mounted: [String: URL] = [:]
         for name in aliases {
             guard let disk = DADiskCreateFromBSDName(nil, session, name),
-                  let id = memberID(disk, under: media.id) else { return nil }
+                  let id = memberID(disk, under: media.id),
+                  let details = DADiskCopyDescription(disk) as NSDictionary? else { return nil }
+            if let path = details[kDADiskDescriptionVolumePathKey] as? URL {
+                guard path.isFileURL, path.path != "/" else { return nil }
+                mounted[name] = path
+            }
             members[name] = id
         }
         let containers = Set(disks.filter(\.isContainer).compactMap { members[$0.id] })
-        return Self(id: media.id, wholeBSD: device.id, members: members, containers: containers)
+        return Self(id: media.id, wholeBSD: device.id, members: members, containers: containers, mountedVolumes: mounted)
     }
 
     // An APFS sibling can appear between inventory scans. Bind it on the serial
@@ -92,5 +99,33 @@ public struct APFSProtectionTarget: Equatable {
             entry = parent
         }
         return nil
+    }
+}
+
+/// Session enrollments keyed by the physical IOMedia registry entry.
+struct APFSEnrollments {
+    var verified: [UInt64: APFSProtectionTarget] = [:]
+    private(set) var roots: [UInt64: String] = [:]
+    var suspended: Set<UInt64> { Set(roots.keys).subtracting(verified.keys) }
+
+    mutating func enroll(_ target: APFSProtectionTarget) {
+        roots[target.id] = target.wholeBSD
+        verified[target.id] = target
+    }
+
+    mutating func remove(_ id: UInt64) {
+        roots.removeValue(forKey: id)
+        verified.removeValue(forKey: id)
+    }
+
+    mutating func recheck(_ id: UInt64, live: UInt64?, target: APFSProtectionTarget?) {
+        guard let bsd = roots[id] else { return }
+        if let live, live != id {
+            remove(id)
+        } else if live == id, let target, target.id == id, target.wholeBSD == bsd {
+            verified[id] = target
+        } else {
+            verified.removeValue(forKey: id)
+        }
     }
 }

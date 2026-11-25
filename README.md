@@ -25,18 +25,24 @@ in that layout.
 Use the protection switch on a directly connected external APFS drive to block
 ordinary unmount and eject requests for its physical disk and volumes. The app
 verifies the backing store and the current I/O Registry attachments before
-arming the rule. Protection lasts for this attachment and app session. To eject
-an APFS drive deliberately, switch protection off and eject in Finder.
+arming the rule. Protection lasts for this attachment and app session.
+If the app loses track of the drive's configuration, the menu shows protection
+as suspended until it can verify the attachment again.
 
 The menu omits the startup disk and groups simulator disk images under a
 collapsed disclosure. It lists other mounted disk images and network shares
 with their eligibility. Drive capacity is counted once per physical device.
 Multi-store APFS containers and unverified devices are informational.
 
-For supported whole-media HFS+, FAT and exFAT drives, **Eject…** asks for
-confirmation before a normal unmount and eject. Disk Arbitration does not
-identify the requester, so a concurrent request for the same drive and phase
-can share that approval. **Quit and Stop Protection** ends enforcement.
+Choose **Eject…** to disconnect a supported drive while keeping its protection
+switch on. For APFS, the confirmation lists every mounted volume on the drive.
+Cancel is the default. Choosing **Eject** starts a normal unmount and eject.
+If a volume is busy, close the files using it and try again. Wait for the app
+to confirm the eject before disconnecting the drive.
+
+Disk Arbitration does not identify the requester, so a concurrent request for
+the same drive and phase can share that approval. **Quit and Stop Protection**
+ends enforcement.
 
 To run the integration test, set `SSD_PROTECT_TEST_IMAGE` to the exact mount
 path of a disposable, eligible image and run `swift test`. The test attempts

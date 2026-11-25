@@ -65,7 +65,7 @@ public struct InventoryRow: Identifiable {
             && mount.lastPathComponent.hasPrefix("com.apple.") && mount.lastPathComponent.contains(".SimulatorRuntime-")
     }
 
-    static func group(_ disks: [DiskRecord], hardware: [String: Hardware], startupWhole: String?) -> [Self] {
+    static func group(_ disks: [DiskRecord], hardware: [String: Hardware], startupWhole: String?, testImageID: UInt64? = nil) -> [Self] {
         let devices = disks.filter { !$0.isContainer }
         var parents: [String: Set<String>] = [:]
         for device in devices {
@@ -100,8 +100,8 @@ public struct InventoryRow: Identifiable {
             var kind = info?.kind ?? .drive
             let mounts = records.compactMap(\.mount)
             if kind == .image {
-                guard !mounts.isEmpty else { continue }
-                if mounts.allSatisfy(isSimulatorMount) {
+                guard !mounts.isEmpty || (testImageID != nil && info?.attachment == testImageID) else { continue }
+                if !mounts.isEmpty && mounts.allSatisfy(isSimulatorMount) {
                     kind = .simulatorImage
                 }
             }
@@ -161,7 +161,7 @@ public enum DriveInventory {
                 hardware[device.id] = Hardware(attachment: media.id, name: name, kind: kind)
             }
         }
-        var rows = InventoryRow.group(disks, hardware: hardware, startupWhole: startup)
+        var rows = InventoryRow.group(disks, hardware: hardware, startupWhole: startup, testImageID: testImageID)
         if let session {
             let devices = Dictionary(disks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             for index in rows.indices where rows[index].reason == .apfs {
