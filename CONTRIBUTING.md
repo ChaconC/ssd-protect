@@ -3,10 +3,12 @@
 Start a topic branch from current `main`. External contributors can push their
 branch to a fork. Keep each pull request focused on one change.
 
-Stage your changes and run the same repository check used in CI from the root:
+Stage your changes and run the same checks used in CI from the root:
 
 ```sh
 ./scripts/check-repo main
+swift test
+./scripts/build-app
 ```
 
 The check inspects the staged tree for files covered by the repository's ignore

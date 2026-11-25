@@ -10,3 +10,4 @@ fi
 
 git diff --cached --check "$base" --
 sh -n scripts/check-repo
+sh -n scripts/build-app
