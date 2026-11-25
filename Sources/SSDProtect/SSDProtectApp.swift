@@ -98,7 +98,7 @@ struct SSDProtectApp: App {
         } label: {
             MenuBarIcon(protectedCount: protectedCount)
                 .accessibilityLabel("SSD Protect")
-                .accessibilityValue(model.protectionWarning ?? "Protecting \(protectedCount) \(protectedCount == 1 ? "drive" : "drives")")
+                .accessibilityValue(model.inventory.menuBarStatus)
         }
         .menuBarExtraStyle(.window)
 
@@ -116,12 +116,20 @@ struct SSDProtectApp: App {
     }
 }
 
-private extension MenuModel {
+extension Inventory {
     var protectionWarning: String? {
-        guard let available = inventory.available else { return "Starting protection…" }
+        guard let available else { return "Starting protection…" }
         guard available else { return "Protection unavailable" }
-        let suspended = inventory.suspendedAPFS.count
+        let suspended = suspendedAPFS.count
         return suspended == 0 ? nil : "Protection suspended for \(suspended) \(suspended == 1 ? "drive" : "drives")"
+    }
+
+    var menuBarStatus: String {
+        guard available == true, !protected.isEmpty else {
+            return protectionWarning ?? "No drives protected"
+        }
+        let active = "Protecting \(protected.count) \(protected.count == 1 ? "drive" : "drives")"
+        return suspendedAPFS.isEmpty ? active : "\(active) · \(suspendedAPFS.count) suspended"
     }
 }
 
@@ -134,7 +142,7 @@ private struct DriveMenu: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("SSD Protect").font(.headline)
-            if let warning = model.protectionWarning {
+            if let warning = model.inventory.protectionWarning {
                 Text(warning).foregroundStyle(.secondary)
             }
             Divider()

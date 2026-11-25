@@ -161,6 +161,22 @@ final class APFSImageTests: XCTestCase {
             return XCTFail("Could not re-enroll the disposable image. \(state.message)")
         }
 
+        if forceRetry {
+            // Simulate a stale physical attachment at the same BSD name and mount paths.
+            let previousID = UInt64.max
+            var members = confirmed.members
+            members[confirmed.wholeBSD] = previousID
+            let stale = APFSProtectionTarget(id: previousID, wholeBSD: confirmed.wholeBSD,
+                                             members: members, containers: confirmed.containers,
+                                             mountedVolumes: confirmed.mountedVolumes)
+            service.forceEject(stale)
+            guard waitUntil({ !state.busy && state.message.contains("state changed") }) else {
+                return XCTFail("Force eject must reject an attachment that was replaced.")
+            }
+            XCTAssertEqual(try currentTarget(), confirmed)
+            XCTAssertTrue(state.protected.contains(imageID))
+        }
+
         // Hold the last volume so a normal eject can partially unmount the image.
         let (busyPath, busyBSD) = try XCTUnwrap(mounts.max { $0.1 < $1.1 })
         _ = try verifiedDisk(at: busyPath, bsd: busyBSD)
