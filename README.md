@@ -20,7 +20,12 @@ The build script signs the app locally with an ad-hoc signature. Set
 Use a disposable disk image for testing. The spike recognizes HFS+, FAT and
 exFAT volumes mounted directly on whole, leaf media under `/Volumes`. It
 accepts verified disk images and explicitly external USB or Thunderbolt media
-in that layout. APFS containers and partitioned disks are outside this spike.
+in that layout.
+
+The menu also shows the startup disk, partitioned drives, mounted disk images
+and network shares with their eligibility reasons. APFS volumes appear under
+their backing disk when all physical stores resolve to that disk. The displayed
+capacity is the total device size. These inventory rows are informational.
 
 Enable the switch beside your test volume, then request an ordinary unmount.
 The volume should stay mounted. In the menu, **Eject…** asks for confirmation
