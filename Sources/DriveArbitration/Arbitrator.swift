@@ -17,6 +17,8 @@ public struct Inventory {
     public var protected: Set<UInt64> = []
     public var suspendedAPFS: Set<UInt64> = []
     public var available: Bool?
+    public var restoresProtection = false
+    public var sessionOnly: Set<UInt64> = []
     public var busy = false
     public var message = ""
     public init() {}
@@ -119,6 +121,7 @@ public final class Arbitrator {
 
     private let topologyChanged: () -> Void
     private let verifier = DispatchQueue(label: "SSDProtect.VerifyAPFS", qos: .userInitiated)
+    private let readForRecheck: (Bool) throws -> [InventoryRow]
     private let testImageID: UInt64?
     private var enrollments = APFSEnrollments()
     private var apfsRules: [UInt64: APFSProtectionTarget] { enrollments.verified }
@@ -126,12 +129,19 @@ public final class Arbitrator {
     private var pendingEnrollment: [UInt64: UUID] = [:]
     private var topologyRevision: UInt64 = 0
     private var rescanScheduled = false
+    private var restoration: RestoreRules
+    private var pendingSaves: Set<UInt64> = []
+    private var pendingRemovals: Set<UInt64> = []
+    private var restored: Set<UInt64> = []
 
-    public convenience init(topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
-        self.init(testImageID: nil, topologyChanged: topologyChanged, update: update)
+    public convenience init(restorationDefaults: UserDefaults? = nil, topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
+        self.init(testImageID: nil, restorationDefaults: restorationDefaults, topologyChanged: topologyChanged, update: update)
     }
 
-    init(testImageID: UInt64?, topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
+    init(testImageID: UInt64?, restorationDefaults: UserDefaults? = nil,
+         readForRecheck: ((Bool) throws -> [InventoryRow])? = nil, topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
+        self.readForRecheck = readForRecheck ?? { try DriveInventory.read(testImageID: testImageID, includeRestoreIdentity: $0) }
+        restoration = RestoreRules(defaults: restorationDefaults)
         self.testImageID = testImageID
         self.topologyChanged = topologyChanged
         deliver = update
@@ -152,6 +162,7 @@ public final class Arbitrator {
             DARegisterDiskUnmountApprovalCallback(session, nil, { disk, ctx in service(ctx).approval(disk, .unmount) }, ctx)
             DARegisterDiskEjectApprovalCallback(session, nil, { disk, ctx in service(ctx).approval(disk, .eject) }, ctx)
             DASessionSetDispatchQueue(session, self.queue)
+            self.scheduleRecheck(after: 0.15)
             self.publish()
         }
     }
@@ -172,8 +183,13 @@ public final class Arbitrator {
                 self.report("Drive changed. Reopen the drive menu.")
                 return
             }
-            if enabled { self.policy.enrolled.insert(target.id) }
-            else { self.policy.enrolled.remove(target.id) }
+            if enabled {
+                self.policy.enrolled.insert(target.id)
+                self.saveSelection(target.id)
+            } else {
+                self.policy.enrolled.remove(target.id)
+                self.removeSelection(target.id)
+            }
             self.publish()
         }
     }
@@ -191,6 +207,7 @@ public final class Arbitrator {
         queue.async {
             self.pendingEnrollment.removeValue(forKey: attachment)
             self.enrollments.remove(attachment)
+            self.removeSelection(attachment)
             self.publish()
         }
     }
@@ -214,10 +231,117 @@ public final class Arbitrator {
                     return
                 }
                 self.enrollments.enroll(target)
+                self.saveSelection(target.id)
                 self.rememberMembers(of: target)
                 self.publish()
             }
         }
+    }
+
+    public func setRestoresProtection(_ enabled: Bool) {
+        queue.async {
+            guard self.restoration.enabled != enabled else { return }
+            self.topologyRevision &+= 1
+            self.restoration.setEnabled(enabled)
+            self.restored.removeAll()
+            self.pendingRemovals.removeAll()
+            self.pendingSaves = enabled ? self.policy.enrolled.union(self.enrollments.roots.keys) : []
+            self.scheduleRecheck(after: 0)
+            self.publish()
+        }
+    }
+
+    private func saveSelection(_ id: UInt64) {
+        guard restoration.enabled else { return }
+        topologyRevision &+= 1
+        pendingRemovals.remove(id)
+        pendingSaves.insert(id)
+        restored.remove(id)
+        scheduleRecheck(after: 0)
+    }
+
+    private func removeSelection(_ id: UInt64) {
+        topologyRevision &+= 1
+        pendingSaves.remove(id)
+        restored.remove(id)
+        if restoration.enabled, restoration.bindings[id] == nil, restoration.hasChoices {
+            pendingRemovals.insert(id)
+        }
+        restoration.forget(id)
+        scheduleRecheck(after: 0)
+    }
+
+    private func clearAttachment(_ id: UInt64) {
+        pendingSaves.remove(id)
+        pendingRemovals.remove(id)
+        restored.remove(id)
+        restoration.disconnected(id)
+    }
+
+    private var needsRecheck: Bool {
+        !enrollments.roots.isEmpty || restoration.hasChoices || !pendingSaves.isEmpty || !pendingRemovals.isEmpty
+    }
+
+    private func reconcileRestoration(_ rows: [InventoryRow]) {
+        guard restoration.enabled, let session else { return }
+        var evidence: [UInt64: IdentityEvidence] = [:]
+        for row in rows {
+            if let id = row.attachment, let identity = row.identity { evidence[id] = identity }
+        }
+        restoration.discardCollisions(in: evidence)
+        let eligible = Set(rows.compactMap { $0.restoreTarget == nil ? nil : $0.attachment })
+        for id in restored {
+            if restoration.bindings[id] == nil {
+                // The saved identity collided. Revoke any automatically armed veto.
+                enrollments.remove(id)
+                policy.enrolled.remove(id)
+                restored.remove(id)
+            } else if active == nil && (!eligible.contains(id) || !restoration.matches(id, evidence: evidence)) {
+                if enrollments.roots[id] != nil {
+                    // Keep the suspended row switchable while the same attachment is present.
+                    enrollments.verified.removeValue(forKey: id)
+                } else {
+                    policy.enrolled.remove(id)
+                    restoration.disconnected(id)
+                    restored.remove(id)
+                }
+            }
+        }
+
+        for row in rows {
+            guard let id = row.attachment,
+                  let root = DADiskCreateFromBSDName(nil, session, row.id),
+                  Media.attachmentID(root) == id else { continue }
+            if pendingRemovals.contains(id) {
+                guard evidence[id]?.isUnique(in: evidence) == true else { continue }
+                pendingRemovals.remove(id)
+                if restoration.matches(id, evidence: evidence) {
+                    restoration.record(id, evidence: evidence)
+                    restoration.forget(id)
+                }
+                continue
+            }
+            guard let target = row.restoreTarget else { continue }
+            if pendingSaves.contains(id) {
+                restoration.record(id, evidence: evidence)
+                continue
+            }
+            guard active == nil, !uncertain.contains(id), pendingEnrollment[id] == nil,
+                  enrollments.roots[id] == nil, !policy.enrolled.contains(id),
+                  restoration.matches(id, evidence: evidence) else { continue }
+            switch target {
+            case .leaf(let drive):
+                guard drives[id] == drive, byBSD[row.id] == id, fresh(drive)?.drive == drive else { continue }
+                policy.enrolled.insert(id)
+            case .apfs(let apfs):
+                enrollments.enroll(apfs)
+                rememberMembers(of: apfs)
+            }
+            restored.insert(id)
+            restoration.record(id, evidence: evidence)
+        }
+        // An explicit choice with insufficient or duplicate identity is session-only.
+        pendingSaves.removeAll()
     }
 
     private func topologyDidChange() {
@@ -227,7 +351,7 @@ public final class Arbitrator {
     }
 
     private func scheduleRecheck(after delay: TimeInterval) {
-        guard !enrollments.roots.isEmpty, !rescanScheduled else { return }
+        guard needsRecheck, !rescanScheduled else { return }
         rescanScheduled = true
         queue.asyncAfter(deadline: .now() + delay) { self.recheckRules() }
     }
@@ -235,9 +359,10 @@ public final class Arbitrator {
     private func recheckRules() {
         let revision = topologyRevision
         let roots = enrollments.roots
-        guard !roots.isEmpty else { rescanScheduled = false; return }
+        guard needsRecheck else { rescanScheduled = false; return }
+        let includeIdentity = restoration.enabled
         verifier.async {
-            let rows = try? DriveInventory.read(testImageID: self.testImageID)
+            let rows = try? self.readForRecheck(includeIdentity)
             self.queue.async {
                 guard self.topologyRevision == revision else { self.recheckRules(); return }
                 self.rescanScheduled = false
@@ -246,14 +371,16 @@ public final class Arbitrator {
                     let live = self.session.flatMap { DADiskCreateFromBSDName(nil, $0, bsd) }.flatMap(Media.attachmentID)
                     let target = rows?.first { $0.id == bsd }?.apfsTarget
                     self.enrollments.recheck(id, live: live, target: target)
+                    if self.enrollments.roots[id] == nil { self.clearAttachment(id) }
                     if let verified = self.apfsRules[id] { self.rememberMembers(of: verified) }
                 }
+                if let rows { self.reconcileRestoration(rows) }
                 let suspended = self.enrollments.suspended
                 if previouslySuspended != suspended {
                     // The menu's last inventory may still lack the recovered target.
                     DispatchQueue.main.async(execute: self.topologyChanged)
                 }
-                if !suspended.isEmpty { self.scheduleRecheck(after: 2) }
+                if !suspended.isEmpty || rows == nil { self.scheduleRecheck(after: 2) }
                 self.publish()
             }
         }
@@ -266,6 +393,7 @@ public final class Arbitrator {
     private func retireAPFSRoot(_ id: UInt64) {
         guard enrollments.roots[id] != nil else { return }
         enrollments.remove(id)
+        clearAttachment(id)
         message = "APFS protection stopped for a disconnected drive."
         publish()
     }
@@ -304,6 +432,7 @@ public final class Arbitrator {
     }
 
     private func forget(_ id: UInt64) {
+        clearAttachment(id)
         drives.removeValue(forKey: id)
         policy.enrolled.remove(id)
         uncertain.remove(id)
@@ -498,6 +627,7 @@ public final class Arbitrator {
         apfsPermit = nil
         active = nil
         policy.operation = nil
+        scheduleRecheck(after: 0)
         report(message)
     }
 
@@ -507,9 +637,13 @@ public final class Arbitrator {
     }
 
     private func publish() {
-        let state = Inventory(drives: Array(drives.values).sorted { $0.name < $1.name },
+        var snapshot = Inventory(drives: Array(drives.values).sorted { $0.name < $1.name },
                               protected: policy.enrolled.union(apfsRules.keys), suspendedAPFS: enrollments.suspended,
                               available: session != nil, busy: active != nil, message: message)
+        snapshot.restoresProtection = restoration.enabled
+        snapshot.sessionOnly = snapshot.protected.union(enrollments.suspended)
+            .subtracting(restoration.bindings.keys).subtracting(pendingSaves)
+        let state = snapshot
         DispatchQueue.main.async { self.deliver(state) }
     }
 }

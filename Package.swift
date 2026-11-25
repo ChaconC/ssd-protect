@@ -7,6 +7,7 @@ let package = Package(
     targets: [
         .target(name: "DriveArbitration"),
         .executableTarget(name: "SSDProtect", dependencies: ["DriveArbitration"]),
+        .testTarget(name: "SettingsTests", dependencies: ["SSDProtect"]),
         .testTarget(name: "DriveArbitrationTests", dependencies: ["DriveArbitration"])
     ]
 )

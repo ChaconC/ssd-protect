@@ -11,7 +11,7 @@ private final class MenuModel: ObservableObject {
     private var revision = 0
     private var scanning = false
     private var subscriptions: Set<AnyCancellable> = []
-    lazy var arbitrator = Arbitrator(topologyChanged: { [weak self] in self?.refresh() }) { [weak self] state in
+    lazy var arbitrator = Arbitrator(restorationDefaults: .standard, topologyChanged: { [weak self] in self?.refresh() }) { [weak self] state in
         self?.inventory = state
     }
 
@@ -103,9 +103,10 @@ struct SSDProtectApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            Text("No settings available.")
-                .foregroundStyle(.secondary)
-                .frame(width: 300, height: 100)
+            AppSettings(restoresProtection: Binding(
+                get: { model.inventory.restoresProtection },
+                set: model.arbitrator.setRestoresProtection
+            ), sessionOnlyCount: model.inventory.sessionOnly.count)
         }
         .windowResizability(.contentSize)
     }
@@ -144,6 +145,7 @@ private struct DriveMenu: View {
                     ForEach(model.inventory.drives) { drive in
                         DriveRow(icon: drive.icon, name: drive.name) {
                             Text(drive.transport)
+                            restorationNote(for: drive.id)
                         } actions: {
                             DriveActions(name: drive.name, protected: Binding(
                                 get: { model.inventory.protected.contains(drive.id) },
@@ -209,6 +211,7 @@ private struct DriveMenu: View {
         return VStack(alignment: .leading, spacing: 4) {
             DriveRow(icon: row.icon, name: row.name) {
                 Text(details(row))
+                if let id = row.attachment { restorationNote(for: id) }
                 if row.volumes.count > 1 { Text(row.volumes.joined(separator: ", ")) }
                 if suspended != nil {
                     Text("Protection suspended until the drive can be verified.")
@@ -229,6 +232,12 @@ private struct DriveMenu: View {
                 Button("Turn Off Protection") { model.arbitrator.disableAPFSProtection(for: suspended) }
                     .disabled(controlsUnavailable)
             }
+        }
+    }
+
+    @ViewBuilder private func restorationNote(for id: UInt64) -> some View {
+        if model.inventory.restoresProtection && model.inventory.sessionOnly.contains(id) {
+            Text("Session only. Drive identity couldn’t be verified for restoration.")
         }
     }
 
