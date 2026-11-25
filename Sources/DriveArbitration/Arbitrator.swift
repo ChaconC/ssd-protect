@@ -308,6 +308,7 @@ public final class Arbitrator {
                 continue
             }
             guard let target = row.restoreTarget else { continue }
+            if case .apfs(let apfs) = target, apfs.mountedVolumes.isEmpty { continue }
             if pendingSaves.contains(id) {
                 restoration.record(id, evidence: evidence)
                 continue
@@ -472,11 +473,11 @@ public final class Arbitrator {
                 self.uncertain.insert(target.id)
                 self.finish("Eject timed out. Check mount state and reconnect before retrying.")
             }
-            self.advanceAPFSEject(expected: target, unmountOptions: unmountOptions, token: token)
+            self.advanceAPFSEject(expected: target, name: nil, unmountOptions: unmountOptions, token: token)
         }
     }
 
-    private func advanceAPFSEject(expected: APFSProtectionTarget, unmountOptions: DADiskUnmountOptions, token: UUID) {
+    private func advanceAPFSEject(expected: APFSProtectionTarget, name: String?, unmountOptions: DADiskUnmountOptions, token: UUID) {
         let revision = topologyRevision
         verifier.async { [self] in
             let rows = try? DriveInventory.read(testImageID: self.testImageID)
@@ -484,13 +485,14 @@ public final class Arbitrator {
             self.queue.async { [self] in
                 guard self.active?.token == token else { return }
                 guard self.topologyRevision == revision else {
-                    self.advanceAPFSEject(expected: expected, unmountOptions: unmountOptions, token: token)
+                    self.advanceAPFSEject(expected: expected, name: name, unmountOptions: unmountOptions, token: token)
                     return
                 }
                 guard row?.apfsTarget == expected else {
                     self.finish("Drive or mount state changed. Eject stopped.")
                     return
                 }
+                let displayName = name ?? row?.name ?? "APFS drive"
                 let nextVolume = expected.mountedVolumes.keys.sorted().first
                 let bsd = nextVolume ?? expected.wholeBSD
                 guard let member = expected.members[bsd], let session = self.session,
@@ -510,9 +512,9 @@ public final class Arbitrator {
                     } else if let nextVolume {
                         var remaining = expected
                         remaining.mountedVolumes.removeValue(forKey: nextVolume)
-                        self.advanceAPFSEject(expected: remaining, unmountOptions: unmountOptions, token: token)
+                        self.advanceAPFSEject(expected: remaining, name: displayName, unmountOptions: unmountOptions, token: token)
                     } else {
-                        self.finish("Ejected \(row?.name ?? "APFS drive").")
+                        self.checkEjectResult(expected, name: displayName, token: token)
                     }
                 }
                 if let mount = expected.mountedVolumes[bsd] {
@@ -521,6 +523,75 @@ public final class Arbitrator {
                 } else {
                     self.report("Ejecting APFS drive…")
                     DADiskEject(disk, 0, completed, reply.retainedContext())
+                }
+            }
+        }
+    }
+
+    private func checkEjectResult(_ target: APFSProtectionTarget, name: String, token: UUID) {
+        // A successful DA reply can leave non-removable USB media online.
+        queue.asyncAfter(deadline: .now() + 0.5) { [self] in
+            guard active?.token == token, let session else { return }
+            let live = DADiskCreateFromBSDName(nil, session, target.wholeBSD).flatMap(Media.attachmentID)
+            func endEnrollment() {
+                enrollments.remove(target.id)
+                clearAttachment(target.id) // Preserve the saved preference for the next mount.
+                topologyDidChange()
+            }
+            guard live == target.id else { endEnrollment(); finish("Ejected \(name)."); return }
+            verifier.async {
+                let rows = try? self.readForRecheck(false)
+                let current = rows?.first { $0.attachment == target.id }?.apfsTarget
+                self.queue.async {
+                    guard self.active?.token == token else { return }
+                    if let current, current.mountedVolumes.isEmpty {
+                        endEnrollment()
+                        self.finish("Unmounted \(name). The drive is still connected.")
+                    } else if let current, !current.mountedVolumes.isEmpty {
+                        self.finish("\(name) is still mounted.")
+                    } else {
+                        let live = DADiskCreateFromBSDName(nil, session, target.wholeBSD).flatMap(Media.attachmentID)
+                        if live != target.id { endEnrollment() }
+                        self.finish(live == target.id ? "Couldn’t verify the mount state of \(name)." : "Ejected \(name).")
+                    }
+                }
+            }
+        }
+    }
+
+    public func remount(_ target: APFSProtectionTarget, named name: String) {
+        queue.async { [self] in
+            guard active == nil, target.canRemount, let bsd = target.singleVolumeBSD else { return }
+            let token = UUID()
+            active = (token, target.id)
+            report("Mounting \(name)…")
+            queue.asyncAfter(deadline: .now() + 60) { [self] in
+                if active?.token == token { finish("Mount timed out. Check the drive in Disk Utility.") }
+            }
+            verifier.async {
+                let rows = try? self.readForRecheck(false)
+                let verified = rows?.contains { $0.kind == .external && $0.apfsTarget == target } == true
+                self.queue.async { [self] in
+                    guard active?.token == token else { return }
+                    guard verified, let session, let root = DADiskCreateFromBSDName(nil, session, target.wholeBSD),
+                          Media.attachmentID(root) == target.id, let disk = DADiskCreateFromBSDName(nil, session, bsd),
+                          let media = Media(disk), media.id == target.members[bsd],
+                          media.description[kDADiskDescriptionVolumePathKey] == nil else {
+                        finish("Drive changed. Reopen the drive menu.")
+                        return
+                    }
+                    let reply = Reply { [self] dissent in
+                        guard active?.token == token else { return }
+                        if let dissent { failed("Mount", dissent); return }
+                        topologyDidChange()
+                        guard let fresh = DADiskCreateFromBSDName(nil, session, bsd).flatMap(Media.init),
+                              fresh.id == media.id, fresh.description[kDADiskDescriptionVolumePathKey] is URL else {
+                            finish("Couldn’t verify the mount for \(name).")
+                            return
+                        }
+                        finish("Mounted \(name).")
+                    }
+                    DADiskMount(disk, nil, 0, completed, reply.retainedContext())
                 }
             }
         }

@@ -135,7 +135,8 @@ public struct InventoryRow: Identifiable {
             else if mounts.isEmpty { reason = .unmounted }
             else { reason = .unsupported }
             let rootName = records.first { $0.mount == "/" }?.visibleName
-            let name = rootName ?? names.first ?? info?.name ?? kind.rawValue
+            let volumeNames = backed.flatMap { $0.volumes ?? [] }.compactMap(\.name).sorted()
+            let name = rootName ?? names.first ?? volumeNames.first ?? info?.name ?? kind.rawValue
             rows.append(Self(id: device.id, attachment: info?.attachment, name: name,
                              icon: DriveIcon(kind: kind, bus: info?.bus, model: info?.name), kind: kind,
                              volumes: names, capacity: device.size, reason: reason))

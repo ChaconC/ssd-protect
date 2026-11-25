@@ -58,7 +58,7 @@ private final class MenuModel: ObservableObject {
         }
         let alert = NSAlert()
         alert.messageText = "Remount \(volume.lastPathComponent)?"
-        alert.informativeText = "Save your work and close files on \(volume.path). SSD Protect will briefly unmount this volume to change Finder’s Eject control."
+        alert.informativeText = "Save your work and close files on \(volume.lastPathComponent). SSD Protect will briefly unmount this volume to change Finder’s Eject control."
         alert.addButton(withTitle: "Cancel").keyEquivalent = "\r"
         alert.addButton(withTitle: enabled ? "Remount and Protect" : "Remount and Unprotect").keyEquivalent = ""
         NSApp.activate(ignoringOtherApps: true)
@@ -68,7 +68,7 @@ private final class MenuModel: ObservableObject {
     func confirm(_ drive: Drive) {
         let alert = NSAlert()
         alert.messageText = "Eject \(drive.name)?"
-        alert.informativeText = "Save your work and stop transfers on \(drive.mount.path) before ejecting this drive."
+        alert.informativeText = "Save your work and stop transfers on \(drive.name) before ejecting this drive."
         if confirmsEject(alert) { arbitrator.ejectConfirmed(drive) }
     }
 
@@ -236,13 +236,23 @@ private struct DriveMenu: View {
                 Text(details(row))
                 if let id = row.attachment { restorationNote(for: id) }
                 if row.volumes.count > 1 { Text(row.volumes.joined(separator: ", ")) }
-                if suspended != nil {
+                if row.apfsTarget?.mountedVolumes.isEmpty == true {
+                    Text("Unmounted")
+                } else if suspended != nil {
                     Text("Protection suspended until the drive can be verified.")
                 } else if row.apfsTarget == nil {
                     Text(row.reason.rawValue)
                 }
             } actions: {
-                if let target = row.apfsTarget, suspended == nil {
+                if let target = row.apfsTarget, target.mountedVolumes.isEmpty {
+                    if target.canRemount {
+                        Button("Mount") { model.arbitrator.remount(target, named: row.name) }
+                            .accessibilityLabel("Mount \(row.name)")
+                            .disabled(controlsUnavailable)
+                    } else {
+                        Button("Eject…") { model.confirm(target, named: row.name) }.disabled(controlsUnavailable)
+                    }
+                } else if let target = row.apfsTarget, suspended == nil {
                     DriveActions(name: row.name, protected: Binding(
                         get: { model.inventory.protected.contains(target.id) },
                         set: { model.changeProtection(target, enabled: $0) }

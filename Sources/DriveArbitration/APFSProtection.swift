@@ -10,6 +10,10 @@ public struct APFSProtectionTarget: Equatable {
     let containers: Set<UInt64>
     public internal(set) var mountedVolumes: [String: URL] = [:]
 
+    var singleVolumeBSD: String? = nil
+
+    public var canRemount: Bool { mountedVolumes.isEmpty && singleVolumeBSD != nil }
+
     func covers(_ bsd: String, observed: UInt64?) -> Bool {
         guard let observed else { return false }
         return members[bsd] == observed
@@ -65,7 +69,10 @@ public struct APFSProtectionTarget: Equatable {
             members[name] = id
         }
         let containers = Set(disks.filter(\.isContainer).compactMap { members[$0.id] })
-        return Self(id: media.id, wholeBSD: device.id, members: members, containers: containers, mountedVolumes: mounted)
+        let volumes = disks.filter { record in members[record.id].map(containers.contains) == true }
+            .flatMap { $0.volumes ?? [] }
+        return Self(id: media.id, wholeBSD: device.id, members: members, containers: containers,
+                    mountedVolumes: mounted, singleVolumeBSD: volumes.count == 1 ? volumes[0].id : nil)
     }
 
     // An APFS sibling can appear between inventory scans. Bind it on the serial
