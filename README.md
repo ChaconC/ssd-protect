@@ -48,8 +48,8 @@ Open **Settings → General** to configure SSD Protect:
   update, choose **Relaunch Finder…** to refresh Locations and Computer.
   Open files on the drive stay accessible. Turning off the setting unregisters
   the helper. If the helper is unavailable, the protection switch still controls
-  ordinary eject protection. Use the drive’s **Hide Finder Eject…** or
-  **Restore Finder Eject…** action to retry.
+  ordinary eject protection. Choose **Retry Finder Update** on the drive to try again.
+  Opening the menu refreshes the inventory. The circular-arrow button refreshes it manually.
 
 The **App icon** picker offers System, Light Cradle and Dark Cradle for the
 running app and About. Finder uses the installed bundle’s system icon.

@@ -3,6 +3,20 @@ import XCTest
 @testable import DriveArbitration
 
 final class FinderMountTests: XCTestCase {
+    func testMountVerificationCanPinDirectoryWithoutReadPermission() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false,
+                                               attributes: [.posixPermissions: 0o100])
+        defer {
+            _ = chmod(dir.path, 0o700)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let fd = try FinderMount.openForVerification(dir)
+        defer { close(fd) }
+        var info = statfs()
+        XCTAssertEqual(fstatfs(fd, &info), 0)
+    }
+
     func testFinderRemountRequiresPositiveUnencryptedEvidenceForSelectedVolume() {
         let path = URL(fileURLWithPath: "/Volumes/Test")
         var target = APFSProtectionTarget(id: 1, wholeBSD: "whole", members: ["selected": 2],

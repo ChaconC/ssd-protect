@@ -13,7 +13,7 @@ final class MenuModel: ObservableObject {
     @Published var offersFinderRelaunch = false
     private let scanner = DispatchQueue(label: "SSDProtect.Inventory", qos: .utility)
     private var revision = 0
-    private var scanning = false
+    @Published private(set) var scanning = false
     private var subscriptions: Set<AnyCancellable> = []
     lazy var arbitrator = Arbitrator(restorationDefaults: .standard, topologyChanged: { [weak self] in self?.refresh() }) { [weak self] state in
         self?.inventory = state
@@ -66,8 +66,8 @@ final class MenuModel: ObservableObject {
     }
 
     func changeProtection(_ target: APFSProtectionTarget, enabled: Bool) {
-        if FinderHelper.service.status == .enabled,
-           let current = finderFlags[target.id], current != enabled {
+        finderUpdateMessage = nil
+        if FinderHelper.service.status == .enabled, target.encryptedIdentity != nil {
             guard let request = beginFinderUpdate(target) else { return }
             arbitrator.protect(target, enabled: enabled) { [weak self] applied in
                 guard let self, self.finderRequests[target.id] == request else { return }
@@ -125,7 +125,7 @@ final class MenuModel: ObservableObject {
                     self.offersFinderRelaunch = true
                     self.finderUpdateMessage = "Finder flag verified \(set ? "on" : "off") for \(path.lastPathComponent). Relaunch Finder to refresh its Eject controls."
                 case .failure(let error):
-                    self.finderUpdateMessage = "Finder update failed. \(error.localizedDescription)"
+                    self.finderUpdateMessage = "Finder update failed for \(path.lastPathComponent). \(error.localizedDescription)"
                 }
                 self.refresh()
             }
@@ -290,6 +290,13 @@ struct DriveMenu: View {
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Settings")
                 .help("Open Settings")
+                Button(action: model.refresh) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Refresh drive list")
+                .help("Refresh drive list")
+                .disabled(model.scanning)
                 Spacer()
                 QuitButton(request: requestQuit).fixedSize()
             }
@@ -408,7 +415,7 @@ struct DriveMenu: View {
             }
             if hideEncryptedFinderEject, let target = row.apfsTarget, let set = model.finderFlags[target.id],
                model.inventory.protected.contains(target.id) != set {
-                Button(set ? "Restore Finder Eject…" : "Hide Finder Eject…") {
+                Button("Retry Finder Update") {
                     model.updateFinderFlag(target, set: !set)
                 }
                 .disabled(controlsUnavailable)

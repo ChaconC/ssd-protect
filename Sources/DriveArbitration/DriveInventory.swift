@@ -152,7 +152,7 @@ public enum DriveInventory {
         try read(testImageID: nil)
     }
 
-    static func read(testImageID: UInt64?, includeRestoreIdentity: Bool = false) throws -> [InventoryRow] {
+    static func read(testImageID: UInt64?, includeRestoreIdentity: Bool = false, includeNetworkShares: Bool = true) throws -> [InventoryRow] {
         let command = Process()
         command.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
         command.arguments = ["list", "-plist"]
@@ -202,6 +202,7 @@ public enum DriveInventory {
                 }
             }
         }
+        guard includeNetworkShares else { return rows }
         let keys: Set<URLResourceKey> = [.volumeIsLocalKey, .volumeLocalizedNameKey]
         let mounts = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: Array(keys),
                                                            options: .skipHiddenVolumes) ?? []
