@@ -6,7 +6,7 @@ ejects and eject them deliberately when you're ready to disconnect.
 
 ## Run the engineering spike
 
-On macOS 14 or later with Xcode selected, run:
+The app runs on macOS 14 or later. To build it, select Xcode 26 or later and run:
 
 ```sh
 swift test
