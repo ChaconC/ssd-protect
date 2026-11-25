@@ -14,6 +14,7 @@ public struct Drive: Identifiable, Equatable {
 public struct Inventory {
     public var drives: [Drive] = []
     public var protected: Set<UInt64> = []
+    public var available: Bool?
     public var busy = false
     public var message = ""
     public init() {}
@@ -56,7 +57,7 @@ struct Media {
         return value
     }
 
-    private var isDiskImage: Bool {
+    var isDiskImage: Bool {
         var entry = DADiskCopyIOMedia(disk)
         while entry != 0 {
             if IOObjectConformsTo(entry, "IOHDIXController") != 0 {
@@ -111,7 +112,12 @@ public final class Arbitrator {
     private var message = ""
     private var started = false
 
-    public init(update: @escaping (Inventory) -> Void) { deliver = update }
+    private let topologyChanged: () -> Void
+
+    public init(topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
+        self.topologyChanged = topologyChanged
+        deliver = update
+    }
 
     public func start() {
         queue.async {
@@ -155,6 +161,7 @@ public final class Arbitrator {
     }
 
     private func refresh(_ disk: DADisk) {
+        DispatchQueue.main.async(execute: topologyChanged)
         guard let media = Media(disk) else { return }
         if let old = byBSD[media.bsd], old != media.id { forget(old) }
         if let drive = media.drive {
@@ -169,6 +176,7 @@ public final class Arbitrator {
     }
 
     private func removed(_ disk: DADisk) {
+        DispatchQueue.main.async(execute: topologyChanged)
         guard let session, let name = DADiskGetBSDName(disk) else { return }
         let bsd = String(cString: name)
         guard byBSD[bsd] != nil else { return }
@@ -260,15 +268,16 @@ public final class Arbitrator {
 
     private func publish() {
         let state = Inventory(drives: Array(drives.values).sorted { $0.name < $1.name },
-                              protected: policy.enrolled, busy: active != nil, message: message)
+                              protected: policy.enrolled, available: session != nil, busy: active != nil, message: message)
         DispatchQueue.main.async { self.deliver(state) }
     }
 }
 
 private extension Inventory {
-    init(drives: [Drive], protected: Set<UInt64>, busy: Bool, message: String) {
+    init(drives: [Drive], protected: Set<UInt64>, available: Bool, busy: Bool, message: String) {
         self.drives = drives
         self.protected = protected
+        self.available = available
         self.busy = busy
         self.message = message
     }
