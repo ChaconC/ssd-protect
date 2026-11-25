@@ -156,6 +156,7 @@ struct DriveMenu: View {
     @ObservedObject var model: MenuModel
     let requestQuit: (NSWindow) -> Void
     let availableHeight: CGFloat
+    @Environment(\.openSettings) private var openSettings
     @StateObject private var option = OptionKey()
     @State private var showsSimulatorImages = false
 
@@ -175,7 +176,11 @@ struct DriveMenu: View {
             }
             Divider()
             HStack {
-                SettingsLink {
+                Button {
+                    // A status item can receive the press while another app owns keyboard focus.
+                    NSApp.activate(ignoringOtherApps: true)
+                    openSettings()
+                } label: {
                     Image(systemName: "gearshape")
                 }
                 .buttonStyle(.bordered)
