@@ -44,8 +44,11 @@ Open **Settings → General** to configure SSD Protect:
   switch protection on or off for a verified external drive with one mounted
   encrypted APFS volume. Install the app in Applications, enable the setting,
   and approve SSD Protect under System Settings → General → Login Items &
-  Extensions. macOS retains approval for the on-demand helper. After an
-  update, choose **Relaunch Finder…** to refresh Locations and Computer.
+  Extensions. SSD Protect remembers this setting across app updates. If a
+  replacement build needs a new registration, choose **Register Finder Helper
+  for This Build…** in the menu, then approve it in System Settings if asked.
+  After a mount flag change, choose **Relaunch Finder…** to refresh Locations
+  and Computer.
   Open files on the drive stay accessible. Turning off the setting offers to clear the flag on the listed
   mounted volumes before unregistering the helper. Relaunch Finder afterward. If the helper is unavailable, the protection switch still controls
   ordinary eject protection. Choose **Retry Finder Update** on the drive to try again.

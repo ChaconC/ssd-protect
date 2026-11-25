@@ -4,6 +4,7 @@ import DriveArbitration
 import SwiftUI
 
 final class MenuModel: ObservableObject {
+    let finderRegistration = FinderRegistration()
     @Published var inventory = Inventory()
     @Published var rows: [InventoryRow] = []
     @Published var scanMessage: String? = "Reading drive inventory…"
@@ -27,6 +28,7 @@ final class MenuModel: ObservableObject {
             center.publisher(for: event).receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in self?.refresh() }.store(in: &subscriptions)
         }
+        finderRegistration.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &subscriptions)
         arbitrator.start()
         refresh()
     }
@@ -38,11 +40,13 @@ final class MenuModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             guard self.revision == requested, !self.scanning else { return }
             self.scanning = true
+            self.finderRegistration.refresh()
+            let readFlags = self.finderRegistration.ready
             self.scanner.async {
                 let result = Result {
                     let rows = try DriveInventory.read()
                     var flags: [UInt64: Bool] = [:]
-                    if FinderHelper.service.status == .enabled {
+                    if readFlags {
                         for target in rows.compactMap(\.apfsTarget) {
                             flags[target.id] = target.encryptedFinderFlag
                         }
@@ -69,7 +73,8 @@ final class MenuModel: ObservableObject {
 
     func changeProtection(_ target: APFSProtectionTarget, enabled: Bool) {
         finderUpdateMessage = nil
-        if !disablingFinderHelper, FinderHelper.service.status == .enabled, target.encryptedIdentity != nil {
+        finderRegistration.refresh()
+        if !disablingFinderHelper, finderRegistration.ready, target.encryptedIdentity != nil {
             guard let request = beginFinderUpdate(target) else { return }
             arbitrator.protect(target, enabled: enabled) { [weak self] applied in
                 guard let self, self.finderRequests[target.id] == request else { return }
@@ -134,12 +139,19 @@ final class MenuModel: ObservableObject {
         }
     }
 
-    func disableFinderHelper(_ registration: LoginItem) {
+    func disableFinderHelper(_ registration: FinderRegistration) {
         guard !disablingFinderHelper, finderRequests.isEmpty else { return }
         helperSettingsMessage = nil
-        guard registration.status == .enabled else {
-            registration.setRequested(false)
-            refresh()
+        guard registration.ready else {
+            let alert = NSAlert()
+            alert.messageText = "Disable the Finder helper?"
+            alert.informativeText = "The helper is unavailable. Existing Finder mount flags will stay set until you restore them with an approved helper."
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Disable Only")
+            if alert.runModal() == .alertSecondButtonReturn {
+                registration.setRequested(false)
+                refresh()
+            }
             return
         }
         disablingFinderHelper = true
@@ -178,7 +190,7 @@ final class MenuModel: ObservableObject {
         }
     }
 
-    private func restoreBeforeDisabling(_ targets: [APFSProtectionTarget], registration: LoginItem) {
+    private func restoreBeforeDisabling(_ targets: [APFSProtectionTarget], registration: FinderRegistration) {
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Result {
                 for target in targets { try FinderHelper.request(target, set: false) }
@@ -196,7 +208,7 @@ final class MenuModel: ObservableObject {
         }
     }
 
-    private func finishFinderDisable(_ registration: LoginItem, error: Error?) {
+    private func finishFinderDisable(_ registration: FinderRegistration, error: Error?) {
         disablingFinderHelper = false
         if let error {
             let alert = NSAlert()
@@ -334,7 +346,7 @@ struct DriveMenu: View {
     let availableHeight: CGFloat
     @Environment(\.openSettings) private var openSettings
     @StateObject private var option = OptionKey()
-    private var hideEncryptedFinderEject: Bool { FinderHelper.service.status == .enabled }
+    private var hideEncryptedFinderEject: Bool { model.finderRegistration.ready }
     @State private var showsSimulatorImages = false
 
     var body: some View {
@@ -346,6 +358,8 @@ struct DriveMenu: View {
         } rows: {
             driveList
         } footer: {
+            FinderApprovalAction(registration: model.finderRegistration)
+                .disabled(model.disablingFinderHelper || !model.finderRequests.isEmpty)
             if let message = model.finderUpdateMessage {
                 Text(message).font(.callout).foregroundStyle(.secondary)
             }

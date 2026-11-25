@@ -23,9 +23,7 @@ struct AppSettings: View {
 
 struct GeneralSettings: View {
     @ObservedObject var model: MenuModel
-    @StateObject private var finderHelper = LoginItem(status: { FinderHelper.service.status }, change: { enabled in
-        if enabled { try FinderHelper.service.register() } else { try FinderHelper.service.unregister() }
-    })
+    private var finderHelper: FinderRegistration { model.finderRegistration }
     @AppStorage("hideFinderEject") private var hideFinderEject = false
     @Binding var restoresProtection: Bool
     let sessionOnlyCount: Int
@@ -69,7 +67,7 @@ struct GeneralSettings: View {
             }
             VStack(alignment: .leading, spacing: 7) {
                 Toggle("Hide Finder Eject on encrypted APFS", isOn: Binding(
-                    get: { finderHelper.status == .enabled || finderHelper.status == .requiresApproval },
+                    get: { finderHelper.requested },
                     set: { enabled in
                         if enabled { finderHelper.setRequested(true) }
                         else { model.disableFinderHelper(finderHelper) }
@@ -83,11 +81,8 @@ struct GeneralSettings: View {
                 }
                 Text("Turning this off lets you restore Finder Eject on eligible mounted volumes before removing the helper.")
                     .foregroundStyle(.secondary)
-                if finderHelper.status == .requiresApproval {
-                    Text("Approve SSD Protect in System Settings to enable the Finder helper.").foregroundStyle(.secondary)
-                    Button("Open Login Items…") { SMAppService.openSystemSettingsLoginItems() }
-                }
-                if let error = finderHelper.errorMessage { Text(error).foregroundStyle(.secondary) }
+                FinderApprovalAction(registration: finderHelper)
+                    .disabled(model.disablingFinderHelper || !model.finderRequests.isEmpty)
             }
             Divider()
             VStack(alignment: .leading, spacing: 8) {
