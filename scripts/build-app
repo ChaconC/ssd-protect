@@ -3,12 +3,13 @@ set -eu
 cd "$(dirname "$0")/.."
 swift build -c release --product SSDProtect
 bin=$(swift build -c release --show-bin-path)
-app=".build/SSD Protect.app"
+app="$PWD/.build/SSD Protect.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-xcrun actool App/AppIcon.icon \
+xcrun actool "$PWD/App/AppIcon.icon" \
     --compile "$app/Contents/Resources" --platform macosx --target-device mac \
     --minimum-deployment-target 14.0 --app-icon AppIcon \
-    --output-partial-info-plist .build/icon-info.plist
+    --output-partial-info-plist "$PWD/.build/icon-info.plist"
+cp App/IconAppearances/*.png "$app/Contents/Resources/"
 cp App/Info.plist "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Merge .build/icon-info.plist" "$app/Contents/Info.plist"
 cp "$bin/SSDProtect" "$app/Contents/MacOS/SSDProtect"

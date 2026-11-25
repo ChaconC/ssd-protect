@@ -177,6 +177,10 @@ struct QuitButton: NSViewRepresentable {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    let appIcons = AppIconSettings()
+
+    func applicationDidFinishLaunching(_ notification: Notification) { appIcons.applySavedAppearance() }
+
     private var confirmingQuit = false
     private var quitApproved = false
 

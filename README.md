@@ -25,9 +25,23 @@ in that layout.
 Use the protection switch on a directly connected external APFS drive to block
 ordinary unmount and eject requests for its physical disk and volumes. The app
 verifies the backing store and the current I/O Registry attachments before
-arming the rule. Protection lasts for this attachment and app session.
+arming the rule. By default, protection lasts for this attachment and app session.
 If the app loses track of the drive's configuration, the menu shows protection
 as suspended until it can verify the attachment again.
+
+Open **Settings → General** to configure SSD Protect:
+
+- **Launch at Login** opens the app when you sign in. If macOS requests approval,
+  choose **Open Login Items…** to finish setup.
+- **Restore protection on launch** remembers the drives you explicitly protect
+  and checks them when the app opens or they reconnect. Restoration requires
+  a unique hardware identifier, a matching media UUID and a verified non-startup
+  layout. Drives that cannot be identified reliably stay session-only.
+  Turning off a drive’s protection forgets its rule. Turning off restoration
+  clears all saved rules and keeps current protection active until disconnect or quit.
+
+The **App icon** picker offers System, Light Cradle and Dark Cradle for the
+running app and About. Finder uses the installed bundle’s system icon.
 
 The menu omits the startup disk and groups simulator disk images under a
 collapsed disclosure. It lists other mounted disk images and network shares
@@ -58,6 +72,10 @@ mount path of one of two mounted sibling volumes on a disposable GPT/APFS
 image. Use a separate disposable two-volume image with
 `SSD_PROTECT_TEST_FORCE_APFS_IMAGE` to exercise force eject with a busy volume.
 Both tests verify the backing image before exercising Disk Arbitration.
+
+Set `SSD_PROTECT_TEST_RESTORE_IMAGE` to a separate disposable whole-media HFS+
+image to exercise restoration across arbitrator restarts using fixture identity
+and isolated preferences. This test leaves the image mounted.
 
 See [Contributing](CONTRIBUTING.md) for the pull request workflow. Source is
 available under the [MIT License](LICENSE).

@@ -69,6 +69,8 @@ public struct InventoryRow: Identifiable {
 
     public let id: String
     public internal(set) var apfsTarget: APFSProtectionTarget? = nil
+    var identity: IdentityEvidence? = nil
+    var restoreTarget: RestoreTarget? = nil
     public let attachment: UInt64?
     public let name: String
     public let icon: DriveIcon
@@ -149,7 +151,7 @@ public enum DriveInventory {
         try read(testImageID: nil)
     }
 
-    static func read(testImageID: UInt64?) throws -> [InventoryRow] {
+    static func read(testImageID: UInt64?, includeRestoreIdentity: Bool = false) throws -> [InventoryRow] {
         let command = Process()
         command.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
         command.arguments = ["list", "-plist"]
@@ -186,11 +188,16 @@ public enum DriveInventory {
         var rows = InventoryRow.group(disks, hardware: hardware, startupWhole: startup, testImageID: testImageID)
         if let session {
             let devices = Dictionary(disks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            for index in rows.indices where rows[index].reason == .apfs {
+            let owners = startupOwners(in: disks, startup: startup)
+            for index in rows.indices {
                 let id = rows[index].id
-                if let device = devices[id], let info = hardware[id] {
+                guard let device = devices[id], let info = hardware[id] else { continue }
+                if rows[index].reason == .apfs {
                     rows[index].apfsTarget = APFSProtectionTarget.resolve(device, disks: disks, startupWhole: startup,
                                                                          session: session, hardware: info, testImageID: testImageID)
+                }
+                if includeRestoreIdentity {
+                    identify(&rows[index], device: device, startupOwners: owners, session: session)
                 }
             }
         }
