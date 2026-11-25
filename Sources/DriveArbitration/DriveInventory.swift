@@ -33,11 +33,14 @@ struct Hardware {
 }
 
 public struct InventoryRow: Identifiable {
-    public enum Kind: String { case drive = "Drive", internalDisk = "Internal", external = "External", image = "Disk image", network = "Network share" }
+    public enum Kind: String {
+        case drive = "Drive", internalDisk = "Internal", external = "External"
+        case image = "Disk image", simulatorImage = "Simulator disk image", network = "Network share"
+    }
     public enum Reason: String {
         case startup = "Startup disk"
         case internalDisk = "Internal drive"
-        case apfs = "Protection for APFS containers is unavailable."
+        case apfs = "Protection is unavailable for this APFS configuration."
         case partitioned = "Protection for partitioned drives is unavailable."
         case ambiguous = "Backing drive could not be verified."
         case unmounted = "No mounted volume."
@@ -46,12 +49,21 @@ public struct InventoryRow: Identifiable {
     }
 
     public let id: String
+    public internal(set) var apfsTarget: APFSProtectionTarget? = nil
     public let attachment: UInt64?
     public let name: String
     public let kind: Kind
     public let volumes: [String]
     public let capacity: Int64?
     public let reason: Reason
+
+    private static func isSimulatorMount(_ path: String) -> Bool {
+        if path.hasPrefix("/Library/Developer/CoreSimulator/") { return true }
+        let mount = URL(fileURLWithPath: path)
+        let parent = mount.deletingLastPathComponent().path
+        return ["/private/var/run/com.apple.security.cryptexd/mnt", "/var/run/com.apple.security.cryptexd/mnt"].contains(parent)
+            && mount.lastPathComponent.hasPrefix("com.apple.") && mount.lastPathComponent.contains(".SimulatorRuntime-")
+    }
 
     static func group(_ disks: [DiskRecord], hardware: [String: Hardware], startupWhole: String?) -> [Self] {
         let devices = disks.filter { !$0.isContainer }
@@ -85,15 +97,20 @@ public struct InventoryRow: Identifiable {
             let names = records.compactMap(\.visibleName).sorted()
             let startup = device.id == startupWhole || backed.contains { $0.id == startupWhole }
                 || records.contains { $0.mount == "/" }
-            let kind = info?.kind ?? .drive
-            let mounted = records.contains { $0.mount != nil }
-            if kind == .image && !mounted { continue }
+            var kind = info?.kind ?? .drive
+            let mounts = records.compactMap(\.mount)
+            if kind == .image {
+                guard !mounts.isEmpty else { continue }
+                if mounts.allSatisfy(isSimulatorMount) {
+                    kind = .simulatorImage
+                }
+            }
             let reason: Reason
             if startup { reason = .startup }
             else if kind == .internalDisk { reason = .internalDisk }
             else if !backed.isEmpty { reason = .apfs }
             else if !(device.partitions ?? []).isEmpty { reason = .partitioned }
-            else if !mounted { reason = .unmounted }
+            else if mounts.isEmpty { reason = .unmounted }
             else { reason = .unsupported }
             let rootName = records.first { $0.mount == "/" }?.visibleName
             let name = rootName ?? names.first ?? info?.name ?? kind.rawValue
@@ -108,6 +125,10 @@ public enum DriveInventory {
     private struct Listing: Decodable { let AllDisksAndPartitions: [DiskRecord] }
 
     public static func read() throws -> [InventoryRow] {
+        try read(testImageID: nil)
+    }
+
+    static func read(testImageID: UInt64?) throws -> [InventoryRow] {
         let command = Process()
         command.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
         command.arguments = ["list", "-plist"]
@@ -120,7 +141,8 @@ public enum DriveInventory {
         let disks = try PropertyListDecoder().decode(Listing.self, from: data).AllDisksAndPartitions
         var hardware: [String: Hardware] = [:]
         var startup: String?
-        if let session = DASessionCreate(nil) {
+        let session = DASessionCreate(nil)
+        if let session {
             let root = URL(fileURLWithPath: "/", isDirectory: true)
             if let disk = DADiskCreateFromVolumePath(nil, session, root as CFURL),
                let whole = DADiskCopyWholeDisk(disk), let name = DADiskGetBSDName(whole) {
@@ -140,6 +162,16 @@ public enum DriveInventory {
             }
         }
         var rows = InventoryRow.group(disks, hardware: hardware, startupWhole: startup)
+        if let session {
+            let devices = Dictionary(disks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for index in rows.indices where rows[index].reason == .apfs {
+                let id = rows[index].id
+                if let device = devices[id], let info = hardware[id] {
+                    rows[index].apfsTarget = APFSProtectionTarget.resolve(device, disks: disks, startupWhole: startup,
+                                                                         session: session, hardware: info, testImageID: testImageID)
+                }
+            }
+        }
         let keys: Set<URLResourceKey> = [.volumeIsLocalKey, .volumeLocalizedNameKey]
         let mounts = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: Array(keys),
                                                            options: .skipHiddenVolumes) ?? []

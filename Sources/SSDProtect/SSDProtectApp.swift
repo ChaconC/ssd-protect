@@ -40,7 +40,7 @@ private final class MenuModel: ObservableObject {
                     switch result {
                     case .success(let rows):
                         self.rows = rows
-                        self.scanMessage = rows.isEmpty ? "No drives found." : nil
+                        self.scanMessage = nil
                     case .failure:
                         self.rows = []
                         self.scanMessage = "Drive inventory unavailable."
@@ -64,6 +64,7 @@ private final class MenuModel: ObservableObject {
 @main
 struct SSDProtectApp: App {
     @StateObject private var model = MenuModel()
+    @State private var showsSimulatorImages = false
 
     var body: some Scene {
         MenuBarExtra("SSD Protect", systemImage: protectedCount > 0 ? "externaldrive.badge.checkmark" : "externaldrive") {
@@ -73,6 +74,8 @@ struct SSDProtectApp: App {
                 Divider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
+                        let rows = inventoryRows
+                        let simulators = rows.filter { $0.kind == .simulatorImage }
                         ForEach(model.inventory.drives) { drive in
                             VStack(alignment: .leading) {
                                 Toggle(drive.name, isOn: Binding(
@@ -87,19 +90,23 @@ struct SSDProtectApp: App {
                             }.disabled(model.inventory.busy)
                             Divider()
                         }
-                        ForEach(readOnlyRows) { row in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(row.name).fontWeight(.medium)
-                                Text(details(row)).font(.caption).foregroundStyle(.secondary)
-                                if row.volumes.count > 1 {
-                                    Text(row.volumes.joined(separator: ", ")).font(.caption)
-                                }
-                                Text(row.reason.rawValue).font(.callout)
-                            }
+                        ForEach(rows.filter { $0.kind != .simulatorImage }) { row in
+                            inventoryRow(row)
                             Divider()
+                        }
+                        if !simulators.isEmpty {
+                            DisclosureGroup("Simulator disk images (\(simulators.count))", isExpanded: $showsSimulatorImages) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(simulators) { row in inventoryRow(row) }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.top, 4)
+                            }
                         }
                         if let message = model.scanMessage {
                             Text(message).foregroundStyle(.secondary)
+                        } else if rows.isEmpty && model.inventory.drives.isEmpty {
+                            Text("No drives to show.").foregroundStyle(.secondary)
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -125,13 +132,43 @@ struct SSDProtectApp: App {
         return protectedCount == 0 ? "No drives protected" : "Protecting \(protectedCount) \(protectedCount == 1 ? "drive" : "drives")"
     }
 
-    private var readOnlyRows: [InventoryRow] {
+    private var inventoryRows: [InventoryRow] {
         let eligible = Set(model.inventory.drives.map(\.id))
-        return model.rows.filter { row in !(row.attachment.map(eligible.contains) ?? false) }
+        return model.rows.filter { row in
+            row.reason != .startup && !(row.attachment.map(eligible.contains) ?? false)
+        }
+    }
+
+    private func inventoryRow(_ row: InventoryRow) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if let target = row.apfsTarget {
+                Toggle(row.name, isOn: Binding(
+                    get: { model.inventory.protected.contains(target.id) },
+                    set: { model.arbitrator.protect(target, enabled: $0) }
+                ))
+                .toggleStyle(.switch)
+                .accessibilityLabel("Protect \(row.name)")
+                .disabled(model.inventory.busy || model.inventory.available != true)
+            } else {
+                Text(row.name).fontWeight(.medium)
+            }
+            Text(details(row)).font(.caption).foregroundStyle(.secondary)
+            if row.volumes.count > 1 {
+                Text(row.volumes.joined(separator: ", ")).font(.caption)
+            }
+            if let target = row.apfsTarget {
+                if model.inventory.protected.contains(target.id) {
+                    Text("Turn off protection to eject in Finder.").font(.callout)
+                }
+            } else {
+                Text(row.reason.rawValue).font(.callout)
+            }
+        }
     }
 
     private func details(_ row: InventoryRow) -> String {
-        guard let bytes = row.capacity else { return row.kind.rawValue }
-        return row.kind.rawValue + " · " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .decimal)
+        let kind = row.apfsTarget == nil ? row.kind.rawValue : "External APFS"
+        guard let bytes = row.capacity else { return kind }
+        return kind + " · " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .decimal)
     }
 }

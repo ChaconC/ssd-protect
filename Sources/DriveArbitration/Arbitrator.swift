@@ -113,8 +113,20 @@ public final class Arbitrator {
     private var started = false
 
     private let topologyChanged: () -> Void
+    private let verifier = DispatchQueue(label: "SSDProtect.VerifyAPFS", qos: .userInitiated)
+    private let testImageID: UInt64?
+    private var apfsRules: [UInt64: APFSProtectionTarget] = [:]
+    private var apfsAttachments = Attachments()
+    private var pendingEnrollment: [UInt64: UUID] = [:]
+    private var topologyRevision: UInt64 = 0
+    private var rescanScheduled = false
 
-    public init(topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
+    public convenience init(topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
+        self.init(testImageID: nil, topologyChanged: topologyChanged, update: update)
+    }
+
+    init(testImageID: UInt64?, topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
+        self.testImageID = testImageID
         self.topologyChanged = topologyChanged
         deliver = update
     }
@@ -160,9 +172,97 @@ public final class Arbitrator {
         }
     }
 
-    private func refresh(_ disk: DADisk) {
+    public func protect(_ target: APFSProtectionTarget, enabled: Bool) {
+        queue.async {
+            self.pendingEnrollment.removeValue(forKey: target.id)
+            guard enabled else {
+                self.apfsRules.removeValue(forKey: target.id)
+                self.publish()
+                return
+            }
+            let request = UUID()
+            self.pendingEnrollment[target.id] = request
+            self.verifyEnrollment(target, request: request)
+        }
+    }
+
+    private func verifyEnrollment(_ target: APFSProtectionTarget, request: UUID) {
+        let revision = topologyRevision
+        verifier.async {
+            let rows = try? DriveInventory.read(testImageID: self.testImageID)
+            let verified = rows?.contains { $0.apfsTarget == target } == true
+            self.queue.async {
+                guard self.pendingEnrollment[target.id] == request else { return }
+                guard self.topologyRevision == revision else {
+                    self.verifyEnrollment(target, request: request)
+                    return
+                }
+                self.pendingEnrollment.removeValue(forKey: target.id)
+                guard verified, let session = self.session,
+                      let root = DADiskCreateFromBSDName(nil, session, target.wholeBSD),
+                      Media.attachmentID(root) == target.id else {
+                    self.report("APFS topology changed. Recheck the drive before enabling protection.")
+                    return
+                }
+                self.install(target)
+                self.publish()
+            }
+        }
+    }
+
+    private func topologyDidChange() {
         DispatchQueue.main.async(execute: topologyChanged)
+        topologyRevision &+= 1
+        guard !apfsRules.isEmpty, !rescanScheduled else { return }
+        rescanScheduled = true
+        queue.asyncAfter(deadline: .now() + 0.15) { self.recheckRules() }
+    }
+
+    private func recheckRules() {
+        let revision = topologyRevision
+        let existing = apfsRules
+        verifier.async {
+            let rows = try? DriveInventory.read(testImageID: self.testImageID)
+            self.queue.async {
+                guard self.topologyRevision == revision else { self.recheckRules(); return }
+                self.rescanScheduled = false
+                guard let rows else {
+                    self.report("Could not refresh APFS topology. Existing verified attachments remain protected.")
+                    return
+                }
+                for (id, previous) in existing where self.apfsRules[id] == previous {
+                    let updated = rows.compactMap(\.apfsTarget).first { $0.id == id }
+                    if let updated {
+                        self.install(updated)
+                    } else {
+                        self.apfsRules.removeValue(forKey: id)
+                        self.message = "APFS protection stopped for a disconnected or changed drive."
+                    }
+                }
+                self.publish()
+            }
+        }
+    }
+
+    private func install(_ target: APFSProtectionTarget) {
+        apfsRules[target.id] = target
+        for (bsd, member) in target.members { apfsAttachments[bsd] = member }
+    }
+
+    private func retireAPFSRoot(_ id: UInt64) {
+        guard apfsRules.removeValue(forKey: id) != nil else { return }
+        message = "APFS protection stopped for a disconnected drive."
+        publish()
+    }
+
+    private func refresh(_ disk: DADisk) {
+        topologyDidChange()
         guard let media = Media(disk) else { return }
+        for (id, rule) in apfsRules {
+            if rule.wholeBSD == media.bsd && id != media.id { retireAPFSRoot(id) }
+            else { apfsRules[id]?.observe(media) }
+        }
+        if !apfsRules.isEmpty { apfsAttachments[media.bsd] = media.id }
         if let old = byBSD[media.bsd], old != media.id { forget(old) }
         if let drive = media.drive {
             byBSD[media.bsd] = media.id
@@ -176,12 +276,14 @@ public final class Arbitrator {
     }
 
     private func removed(_ disk: DADisk) {
-        DispatchQueue.main.async(execute: topologyChanged)
+        topologyDidChange()
         guard let session, let name = DADiskGetBSDName(disk) else { return }
         let bsd = String(cString: name)
-        guard byBSD[bsd] != nil else { return }
+        guard byBSD[bsd] != nil || apfsAttachments[bsd] != nil else { return }
         let live = DADiskCreateFromBSDName(nil, session, bsd).flatMap(Media.attachmentID)
-        guard let id = byBSD.retire(bsd, departing: Media.attachmentID(disk), live: live) else { return }
+        let departing = Media.attachmentID(disk)
+        if let retired = apfsAttachments.retire(bsd, departing: departing, live: live) { retireAPFSRoot(retired) }
+        guard let id = byBSD.retire(bsd, departing: departing, live: live) else { return }
         forget(id)
         publish()
     }
@@ -200,9 +302,12 @@ public final class Arbitrator {
     }
 
     private func approval(_ disk: DADisk, _ phase: Phase) -> Unmanaged<DADissenter>? {
-        guard let name = DADiskGetBSDName(disk),
-              let id = byBSD[String(cString: name)] else { return nil }
-        let veto = policy.veto(id, phase)
+        guard let name = DADiskGetBSDName(disk) else { return nil }
+        let bsd = String(cString: name)
+        let observed = apfsAttachments[bsd]
+        let apfsVeto = apfsRules.values.contains { $0.covers(bsd, observed: observed) }
+        let veto = apfsVeto || byBSD[bsd].map { policy.veto($0, phase) } == true
+        guard apfsVeto || byBSD[bsd] != nil else { return nil }
         log.info("Approval phase=\(String(describing: phase), privacy: .public) veto=\(veto, privacy: .public)")
         guard veto else { return nil }
         queue.async { self.report("Blocked an ordinary \(phase) request.") }
@@ -268,7 +373,7 @@ public final class Arbitrator {
 
     private func publish() {
         let state = Inventory(drives: Array(drives.values).sorted { $0.name < $1.name },
-                              protected: policy.enrolled, available: session != nil, busy: active != nil, message: message)
+                              protected: policy.enrolled.union(apfsRules.keys), available: session != nil, busy: active != nil, message: message)
         DispatchQueue.main.async { self.deliver(state) }
     }
 }
