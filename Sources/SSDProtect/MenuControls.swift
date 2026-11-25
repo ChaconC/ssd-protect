@@ -38,17 +38,22 @@ struct DriveRow<Detail: View, Actions: View>: View {
     }
 }
 
-// Observe flags only while the menu is visible. Read live flags again at
-// activation so a stale tooltip can never select the destructive action.
+private extension NSEvent.ModifierFlags {
+    var isEjectAlternate: Bool {
+        intersection(.deviceIndependentFlagsMask).subtracting(.capsLock) == .option
+    }
+}
+
+// Modifier monitoring is only for the image and help shown in the menu.
 final class OptionKey: ObservableObject {
     @Published private(set) var isDown = false
     private var monitor: Any?
 
     func start() {
-        isDown = NSEvent.modifierFlags.contains(.option)
+        isDown = NSEvent.modifierFlags.isEjectAlternate
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            self?.isDown = event.modifierFlags.contains(.option)
+            self?.isDown = event.modifierFlags.isEjectAlternate
             return event
         }
     }
@@ -72,23 +77,74 @@ struct DriveActions: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .controlSize(.small)
-        Button {
-            if NSEvent.modifierFlags.contains(.option) { forceEject() }
-            else { eject() }
-        } label: {
-            Image(systemName: optionDown ? "eject.fill" : "eject")
-                .frame(width: 24, height: 24)
-                .contentShape(Rectangle())
+        EjectControl(name: name, optionDown: optionDown, eject: eject, forceEject: forceEject)
+            .frame(width: 24, height: 24)
+    }
+}
+
+private struct EjectControl: NSViewRepresentable {
+    let name: String
+    let optionDown: Bool
+    let eject: () -> Void
+    let forceEject: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeNSView(context: Context) -> EjectButton {
+        let button = EjectButton()
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.target = button
+        button.action = #selector(EjectButton.ordinaryPress)
+        return button
+    }
+
+    func updateNSView(_ button: EjectButton, context: Context) {
+        button.eject = eject
+        button.forceEject = forceEject
+        button.isEnabled = isEnabled
+        button.image = NSImage(systemSymbolName: optionDown ? "eject.fill" : "eject", accessibilityDescription: nil)
+        button.setAccessibilityLabel("Eject \(name)")
+        button.toolTip = optionDown ? "Force Eject \(name) without confirmation. Unsaved changes may be lost."
+            : "Eject \(name)… Hold Option to Force Eject."
+        button.setAccessibilityHelp(button.toolTip)
+    }
+}
+
+final class EjectButton: NSButton {
+    var eject: (() -> Void)?
+    var forceEject: (() -> Void)?
+
+    @objc func ordinaryPress() { eject?() }
+    @objc private func forcePress() { forceEject?() }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        ordinaryPress()
+        return true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        // Keep AppKit's click tracking, including cancellation on drag-out.
+        // Select the alternate only for this primary-button interaction.
+        let original = action
+        if event.type == .leftMouseDown && event.modifierFlags.isEjectAlternate {
+            action = #selector(forcePress)
         }
-        .buttonStyle(.borderless)
-        .onKeyPress(.space, phases: .down) { press in
-            guard press.modifiers.contains(.option) else { return .ignored }
-            forceEject()
-            return .handled
+        defer { action = original }
+        super.mouseDown(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        guard event.type == .keyDown, event.charactersIgnoringModifiers == " ",
+              event.modifierFlags.contains(.option) else {
+            super.keyDown(with: event)
+            return
         }
-        .accessibilityLabel(optionDown ? "Force Eject \(name)" : "Eject \(name)")
-        .help(optionDown ? "Force Eject \(name) without confirmation. Unsaved changes may be lost."
-              : "Eject \(name)… Hold Option to Force Eject.")
+        guard !event.isARepeat else { return }
+        if event.modifierFlags.isEjectAlternate { forcePress() }
+        else { ordinaryPress() }
     }
 }
 
