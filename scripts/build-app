@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+swift build -c release --product SSDProtect
+bin=$(swift build -c release --show-bin-path)
+app=".build/SSD Protect.app"
+mkdir -p "$app/Contents/MacOS"
+cp App/Info.plist "$app/Contents/Info.plist"
+cp "$bin/SSDProtect" "$app/Contents/MacOS/SSDProtect"
+codesign --force --options runtime --sign "${SIGNING_IDENTITY:--}" "$app"
+codesign --verify --strict "$app"
+printf '%s\n' "$app"
