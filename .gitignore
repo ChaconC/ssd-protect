@@ -1,0 +1,33 @@
+# Keep working notes and handoff material local. Public project guidance is tracked.
+/docs/
+/plans/
+/notes/
+/.local/
+*.md
+!/README.md
+!/CONTRIBUTING.md
+!/AGENTS.md
+!/.github/pull_request_template.md
+
+# macOS, SwiftPM and Xcode
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcarchive
+*.xcresult
+
+# Local configuration, signing identities and disk images
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.provisionprofile
+*.mobileprovision
+*.keychain-db
+*.dmg
+*.sparseimage
+*.sparsebundle/

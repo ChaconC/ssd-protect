@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+base=${1:-HEAD}
+ignored=$(git ls-files --cached --ignored --exclude-per-directory=.gitignore)
+if [ -n "$ignored" ]; then
+    printf 'Remove these ignored files from the index:\n%s\n' "$ignored" >&2
+    exit 1
+fi
+
+git diff --cached --check "$base" --
+sh -n scripts/check-repo
