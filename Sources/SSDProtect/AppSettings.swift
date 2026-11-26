@@ -3,6 +3,7 @@ import ServiceManagement
 import SwiftUI
 
 struct AppSettings: View {
+    @ObservedObject var model: MenuModel
     @Binding var restoresProtection: Bool
     let sessionOnlyCount: Int
     @ObservedObject var appIcons: AppIconSettings
@@ -10,7 +11,7 @@ struct AppSettings: View {
 
     var body: some View {
         TabView {
-            GeneralSettings(restoresProtection: $restoresProtection, sessionOnlyCount: sessionOnlyCount, login: login, appIcons: appIcons)
+            GeneralSettings(model: model, restoresProtection: $restoresProtection, sessionOnlyCount: sessionOnlyCount, login: login, appIcons: appIcons)
                 .tabItem { Label("General", systemImage: "gearshape") }
             AboutSettings(appIcons: appIcons)
                 .tabItem { Label("About", systemImage: "info.circle") }
@@ -21,6 +22,8 @@ struct AppSettings: View {
 }
 
 struct GeneralSettings: View {
+    @ObservedObject var model: MenuModel
+    private var finderHelper: FinderRegistration { model.finderRegistration }
     @AppStorage("hideFinderEject") private var hideFinderEject = false
     @Binding var restoresProtection: Bool
     let sessionOnlyCount: Int
@@ -60,7 +63,26 @@ struct GeneralSettings: View {
             Divider()
             VStack(alignment: .leading, spacing: 7) {
                 Toggle("Hide Finder Eject on protection changes", isOn: $hideFinderEject)
-                Text("Hiding Eject remounts an eligible unencrypted APFS volume. Encrypted volumes keep their Finder Eject button and use ordinary eject protection.").foregroundStyle(.secondary)
+                Text("Hiding Eject remounts an eligible unencrypted APFS volume. This option applies only to unencrypted volumes.").foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                Toggle("Hide Finder Eject on encrypted APFS", isOn: Binding(
+                    get: { finderHelper.requested },
+                    set: { enabled in
+                        if enabled { finderHelper.requestApproval() }
+                        else { model.disableFinderHelper(finderHelper) }
+                    }
+                ))
+                .disabled(model.disablingFinderHelper || !model.finderRequests.isEmpty)
+                if model.disablingFinderHelper {
+                    ProgressView("Checking mounted volumes…").controlSize(.small)
+                } else if let message = model.helperSettingsMessage, finderHelper.status == .notRegistered {
+                    Text(message).foregroundStyle(.secondary)
+                }
+                Text("Turning this off lets you restore Finder Eject on eligible mounted volumes before removing the helper.")
+                    .foregroundStyle(.secondary)
+                FinderApprovalAction(registration: finderHelper)
+                    .disabled(model.disablingFinderHelper || !model.finderRequests.isEmpty)
             }
             Divider()
             VStack(alignment: .leading, spacing: 8) {
@@ -85,9 +107,10 @@ struct GeneralSettings: View {
         .toggleStyle(.switch)
         .fixedSize(horizontal: false, vertical: true)
         .padding(24)
-        .onAppear { login.refresh() }
+        .onAppear { login.refresh(); finderHelper.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             login.refresh()
+            finderHelper.refresh()
         }
     }
 
