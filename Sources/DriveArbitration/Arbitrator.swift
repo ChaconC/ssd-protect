@@ -62,10 +62,12 @@ struct Media {
         return value
     }
 
-    var isDiskImage: Bool {
+    var isDiskImage: Bool { hasAncestor(conformingTo: "IOHDIXController") }
+
+    func hasAncestor(conformingTo className: String) -> Bool {
         var entry = DADiskCopyIOMedia(disk)
         while entry != 0 {
-            if IOObjectConformsTo(entry, "IOHDIXController") != 0 {
+            if IOObjectConformsTo(entry, className) != 0 {
                 IOObjectRelease(entry)
                 return true
             }

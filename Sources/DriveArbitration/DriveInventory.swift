@@ -180,7 +180,9 @@ public enum DriveInventory {
                 let internalFlag = media.description[kDADiskDescriptionDeviceInternalKey] as? Bool
                 let kind: InventoryRow.Kind
                 let bus = media.description[kDADiskDescriptionDeviceProtocolKey] as? String
-                if bus == "Disk Image" || media.isDiskImage { kind = .image }
+                if bus == "Disk Image" || media.isDiskImage || media.hasAncestor(conformingTo: "AppleDiskImageDevice") {
+                    kind = .image
+                }
                 else if internalFlag == true { kind = .internalDisk }
                 else if internalFlag == false { kind = .external }
                 else { kind = .drive }
