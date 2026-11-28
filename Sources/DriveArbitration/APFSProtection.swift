@@ -16,6 +16,10 @@ public struct APFSProtectionTarget: Equatable {
 
     public internal(set) var singleVolumeLocked = false
 
+    var noticeName: String {
+        mountedVolumes.isEmpty ? wholeBSD : mountedVolumes.values.map(\.lastPathComponent).sorted().joined(separator: ", ")
+    }
+
     public var canRemount: Bool { mountedVolumes.isEmpty && singleVolumeBSD != nil && !singleVolumeLocked }
 
     func nextEjectBSD(verifiedBy current: Self?) -> String? {

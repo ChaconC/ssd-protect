@@ -18,7 +18,8 @@ final class MenuModel: ObservableObject {
     private var revision = 0
     @Published private(set) var scanning = false
     private var subscriptions: Set<AnyCancellable> = []
-    lazy var arbitrator = Arbitrator(restorationDefaults: .standard, topologyChanged: { [weak self] in self?.refresh() }) { [weak self] state in
+    private let notifications = ProtectionNotifications()
+    lazy var arbitrator = Arbitrator(restorationDefaults: .standard, protectionNotice: notifications.post, topologyChanged: { [weak self] in self?.refresh() }) { [weak self] state in
         self?.inventory = state
     }
 
@@ -512,7 +513,7 @@ struct DriveMenu: View {
                 .disabled(controlsUnavailable)
             }
             if let suspended {
-                Button("Turn Off Protection") { model.arbitrator.disableAPFSProtection(for: suspended) }
+                Button("Turn Off Protection") { model.arbitrator.disableAPFSProtection(for: suspended, named: row.name) }
                     .disabled(controlsUnavailable)
             }
         }
