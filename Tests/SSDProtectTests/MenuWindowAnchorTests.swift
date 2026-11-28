@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class MenuWindowAnchorTests: XCTestCase {
-    func testOpenPopoverGrowsDownwardAndScrollsOnlyAtScreenLimit() throws {
+    func testOpenPanelGrowsDownwardAndScrollsOnlyAtScreenLimit() throws {
         _ = NSApplication.shared
         let screen = try XCTUnwrap(NSScreen.main)
         let anchor = NSWindow(contentRect: NSRect(x: screen.visibleFrame.midX, y: screen.visibleFrame.maxY - 35,
@@ -18,23 +18,18 @@ final class MenuWindowAnchorTests: XCTestCase {
 
         let limit = min(600, screen.visibleFrame.height - 100)
         let rows = RowHeights()
-        let host = NSHostingController(rootView: MenuFixture(rows: rows, limit: limit))
-        host.sizingOptions = [.preferredContentSize]
-        let popover = NSPopover()
-        popover.animates = false
-        popover.contentViewController = host
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        defer { popover.close() }
+        let window = MenuPanel()
+        window.show(below: button) { _ in MenuFixture(rows: rows, limit: limit) }
+        defer { window.dismiss() }
 
         func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.15)) }
         settle()
-        let window = try XCTUnwrap(host.view.window)
         let original = window.frame
         let expanded = min(420, limit - 100)
         for heightRequest in [expanded, limit * 2, 100] {
             rows.height = heightRequest
             settle()
-            let height = host.view.bounds.height
+            let height = window.frame.height
             XCTAssertEqual(window.frame.maxY, original.maxY, accuracy: 1)
             if heightRequest == expanded {
                 XCTAssertEqual(window.frame.height - original.height, expanded - 100, accuracy: 1)
@@ -44,6 +39,20 @@ final class MenuWindowAnchorTests: XCTestCase {
                 XCTAssertEqual(window.frame.height, original.height, accuracy: 1)
             }
         }
+
+        func click(in target: NSWindow) throws {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 5, y: 5),
+                modifierFlags: [], timestamp: 0, windowNumber: target.windowNumber, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 1))
+            window.handleClick(event)
+        }
+        try click(in: window)
+        XCTAssertTrue(window.isVisible)
+        try click(in: anchor)
+        XCTAssertTrue(window.isVisible)
+        let settings = NSWindow(contentRect: anchor.frame, styleMask: .titled, backing: .buffered, defer: false)
+        try click(in: settings)
+        XCTAssertFalse(window.isVisible)
     }
 }
 
