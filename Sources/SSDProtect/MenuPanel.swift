@@ -24,6 +24,8 @@ final class MenuPanel: NSPanel {
         guard let window = button.window, let screen = window.screen else { return }
         NotificationCenter.default.addObserver(self, selector: #selector(anchorMoved),
                                                name: NSWindow.didMoveNotification, object: window)
+        NotificationCenter.default.addObserver(self, selector: #selector(appResignedActive(_:)),
+                                               name: NSApplication.didResignActiveNotification, object: NSApp)
         anchor = button
         let bounds = screen.visibleFrame.insetBy(dx: 4, dy: 4)
         let top = min(bounds.maxY, window.convertToScreen(button.convert(button.bounds, to: nil)).minY - 4)
@@ -49,6 +51,10 @@ final class MenuPanel: NSPanel {
 
     @objc private func anchorMoved() {
         resize(to: frame.size)
+    }
+
+    @objc private func appResignedActive(_ notification: Notification) {
+        dismiss()
     }
 
     private func resize(to size: NSSize) {
@@ -89,6 +95,7 @@ final class MenuPanel: NSPanel {
         monitors.forEach(NSEvent.removeMonitor)
         monitors.removeAll()
         NotificationCenter.default.removeObserver(self, name: NSWindow.didMoveNotification, object: anchor?.window)
+        NotificationCenter.default.removeObserver(self, name: NSApplication.didResignActiveNotification, object: NSApp)
         sizeObservation = nil
         orderOut(nil)
     }

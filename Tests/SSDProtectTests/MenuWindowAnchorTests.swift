@@ -53,6 +53,11 @@ final class MenuWindowAnchorTests: XCTestCase {
         let settings = NSWindow(contentRect: anchor.frame, styleMask: .titled, backing: .buffered, defer: false)
         try click(in: settings)
         XCTAssertFalse(window.isVisible)
+
+        window.show(below: button) { _ in MenuFixture(rows: rows, limit: limit) }
+        XCTAssertTrue(window.isVisible)
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        XCTAssertFalse(window.isVisible)
     }
 }
 
