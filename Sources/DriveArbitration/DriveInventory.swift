@@ -77,6 +77,7 @@ public struct InventoryRow: Identifiable {
     public let kind: Kind
     public let volumes: [String]
     public let capacity: Int64?
+    public var visibleInDriveList: Bool { reason != .startup && kind != .image && kind != .simulatorImage }
     public let reason: Reason
 
     private static func isSimulatorMount(_ path: String) -> Bool {
@@ -106,8 +107,9 @@ public struct InventoryRow: Identifiable {
             } else {
                 let names = (container.volumes ?? []).compactMap(\.visibleName).sorted()
                 if !names.isEmpty || container.id == startupWhole {
+                    let image = hardware[container.id]?.kind == .image
                     rows.append(Self(id: container.id, attachment: nil, name: names.first ?? "APFS container",
-                                     icon: .external, kind: .drive, volumes: names, capacity: nil,
+                                     icon: image ? .diskImage : .external, kind: image ? .image : .drive, volumes: names, capacity: nil,
                                      reason: container.id == startupWhole ? .startup : .ambiguous))
                 }
             }
@@ -172,18 +174,19 @@ public enum DriveInventory {
                let whole = DADiskCopyWholeDisk(disk), let name = DADiskGetBSDName(whole) {
                 startup = String(cString: name)
             }
-            for device in disks where !device.isContainer {
+            for device in disks {
                 guard let disk = DADiskCreateFromBSDName(nil, session, device.id),
                       let media = Media(disk) else { continue }
                 let internalFlag = media.description[kDADiskDescriptionDeviceInternalKey] as? Bool
                 let kind: InventoryRow.Kind
-                if media.isDiskImage { kind = .image }
+                let bus = media.description[kDADiskDescriptionDeviceProtocolKey] as? String
+                if bus == "Disk Image" || media.isDiskImage { kind = .image }
                 else if internalFlag == true { kind = .internalDisk }
                 else if internalFlag == false { kind = .external }
                 else { kind = .drive }
                 let name = media.description[kDADiskDescriptionDeviceModelKey] as? String
                 hardware[device.id] = Hardware(attachment: media.id, name: name, kind: kind,
-                                               bus: media.description[kDADiskDescriptionDeviceProtocolKey] as? String)
+                                               bus: bus)
             }
         }
         var rows = InventoryRow.group(disks, hardware: hardware, startupWhole: startup, testImageID: testImageID)

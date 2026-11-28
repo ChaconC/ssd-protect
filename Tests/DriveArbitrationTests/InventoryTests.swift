@@ -57,6 +57,7 @@ final class InventoryTests: XCTestCase {
             "external": Hardware(attachment: 12, name: nil, kind: .external)
         ], startupWhole: nil)
         XCTAssertEqual(rows.map(\.id), ["visible", "external"])
+        XCTAssertEqual(rows.filter(\.visibleInDriveList).map(\.id), ["external"])
         XCTAssertEqual(rows.first?.kind, .image)
         XCTAssertEqual(rows.last?.reason, .partitioned)
         XCTAssertEqual(rows.last?.volumes, ["Files"])
@@ -94,6 +95,7 @@ final class InventoryTests: XCTestCase {
         })
         hardware[physical.id] = Hardware(attachment: 20, name: nil, kind: .external)
         let rows = InventoryRow.group(images + [physical, container], hardware: hardware, startupWhole: nil)
+        XCTAssertEqual(rows.filter(\.visibleInDriveList).map(\.id), ["physical"])
         XCTAssertEqual(Set(rows.filter { $0.kind == .simulatorImage }.map(\.id)), ["image", "bundle", "cryptex"])
         XCTAssertEqual(Set(rows.filter { $0.kind == .image }.map(\.id)), ["regular", "similar", "mixed", "other"])
     }

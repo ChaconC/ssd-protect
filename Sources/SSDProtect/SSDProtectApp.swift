@@ -343,7 +343,6 @@ struct DriveMenu: View {
     @Environment(\.openSettings) private var openSettings
     @StateObject private var option = OptionKey()
     private var hideEncryptedFinderEject: Bool { model.finderRegistration.ready }
-    @State private var showsSimulatorImages = false
 
     var body: some View {
         DriveMenuLayout(availableHeight: availableHeight) {
@@ -402,8 +401,8 @@ struct DriveMenu: View {
     private var driveList: some View {
         VStack(alignment: .leading, spacing: 10) {
             let rows = inventoryRows
-            let simulators = rows.filter { $0.kind == .simulatorImage }
-            ForEach(model.inventory.drives) { drive in
+            let drives = model.inventory.drives.filter { $0.transport != "Disk Image" }
+            ForEach(drives) { drive in
                 DriveRow(icon: drive.icon, name: drive.name) {
                     Text(drive.transport)
                     restorationNote(for: drive.id)
@@ -415,32 +414,12 @@ struct DriveMenu: View {
                        forceEject: { model.arbitrator.forceEject(drive) })
                 }.disabled(controlsUnavailable)
             }
-            ForEach(rows.filter { $0.kind != .simulatorImage }) { row in
+            ForEach(rows) { row in
                 inventoryRow(row)
-            }
-            if !simulators.isEmpty {
-                Button {
-                    showsSimulatorImages.toggle()
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: showsSimulatorImages ? "chevron.down" : "chevron.right")
-                            .font(.caption.bold())
-                            .frame(width: 12)
-                        Text("Simulator disk images (\(simulators.count))")
-                    }
-                }
-                .buttonStyle(.plain)
-                .accessibilityValue(showsSimulatorImages ? "Expanded" : "Collapsed")
-                if showsSimulatorImages {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(simulators) { row in inventoryRow(row) }
-                    }
-                    .padding(.leading, 17)
-                }
             }
             if let message = model.scanMessage {
                 Text(message).foregroundStyle(.secondary)
-            } else if rows.isEmpty && model.inventory.drives.isEmpty {
+            } else if rows.isEmpty && drives.isEmpty {
                 Text("No drives to show.").foregroundStyle(.secondary)
             }
         }
@@ -452,7 +431,7 @@ struct DriveMenu: View {
     private var inventoryRows: [InventoryRow] {
         let eligible = Set(model.inventory.drives.map(\.id))
         return model.rows.filter { row in
-            row.reason != .startup && !(row.attachment.map(eligible.contains) ?? false)
+            row.visibleInDriveList && !(row.attachment.map(eligible.contains) ?? false)
         }
     }
 
