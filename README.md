@@ -29,11 +29,11 @@ arming the rule. By default, protection lasts for this attachment and app sessio
 If the app loses track of the drive's configuration, the menu shows protection
 as suspended until it can verify the attachment again.
 
-Open **Settings → General** to configure SSD Protect:
+Open **Settings** to configure SSD Protect:
 
-- **Launch at Login** opens the app when you sign in. If macOS requests approval,
+- In **General**, **Launch at Login** opens the app when you sign in. If macOS requests approval,
   choose **Open Login Items…** to finish setup.
-- **Restore protection on launch** remembers the drives you explicitly protect
+- In **Protection**, **Restore protection on launch** remembers the drives you explicitly protect
   and checks them when the app opens or they reconnect. Restoration requires
   a unique hardware identifier, a matching media UUID and a verified non-startup
   layout. Drives that cannot be identified reliably stay session-only.
@@ -54,8 +54,9 @@ Open **Settings → General** to configure SSD Protect:
   ordinary eject protection. Choose **Retry Finder Update** on the drive to try again.
   Opening the menu refreshes the inventory. The circular-arrow button refreshes it manually.
 
-The **App icon** picker offers System, Light Cradle and Dark Cradle for the
-running app and About. Finder uses the installed bundle’s system icon.
+In **Settings → General**, choose **System**, **Light** or **Dark** under
+**Appearance**. The settings window, menu and running app icon update immediately.
+Existing app icon choices carry over. Finder uses the installed bundle’s system icon.
 
 The menu omits the startup disk and groups simulator disk images under a
 collapsed disclosure. It lists other mounted disk images and network shares

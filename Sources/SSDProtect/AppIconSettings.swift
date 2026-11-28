@@ -7,24 +7,28 @@ enum AppIconChoice: String, CaseIterable {
     var title: String {
         switch self {
         case .system: "System"
-        case .light: "Light Cradle"
-        case .dark: "Dark Cradle"
+        case .light: "Light"
+        case .dark: "Dark"
         }
     }
 }
 
 final class AppIconSettings: ObservableObject {
+    // Existing icon choices use the same raw values as the app appearance.
     private static let key = "appIconAppearance"
     private let defaults: UserDefaults
     private let load: (AppIconChoice) -> NSImage?
     private let apply: (NSImage?) -> Void
+    private let applyAppearance: (NSAppearance?) -> Void
     @Published private(set) var choice: AppIconChoice
     @Published private(set) var errorMessage: String?
 
     init(defaults: UserDefaults = .standard,
          load: @escaping (AppIconChoice) -> NSImage? = AppIconSettings.bundledImage,
-         apply: @escaping (NSImage?) -> Void = { NSApp.applicationIconImage = $0 }) {
+         apply: @escaping (NSImage?) -> Void = { NSApp.applicationIconImage = $0 },
+         applyAppearance: @escaping (NSAppearance?) -> Void = { NSApp.appearance = $0 }) {
         self.defaults = defaults
+        self.applyAppearance = applyAppearance
         self.load = load
         self.apply = apply
         choice = defaults.string(forKey: Self.key).flatMap(AppIconChoice.init(rawValue:)) ?? .system
@@ -37,6 +41,11 @@ final class AppIconSettings: ObservableObject {
         guard newChoice == .system || icon != nil else {
             errorMessage = "This app copy is missing the selected icon."
             return
+        }
+        switch newChoice {
+        case .system: applyAppearance(nil)
+        case .light: applyAppearance(NSAppearance(named: .aqua))
+        case .dark: applyAppearance(NSAppearance(named: .darkAqua))
         }
         apply(icon)
         errorMessage = nil
