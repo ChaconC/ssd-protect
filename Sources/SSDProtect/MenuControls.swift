@@ -149,7 +149,6 @@ final class EjectButton: NSButton {
     }
 }
 
-// A status-item popover can receive a click without becoming the key window.
 // The footer button supplies its own window as the sheet's parent.
 struct QuitButton: NSViewRepresentable {
     let request: (NSWindow) -> Void
@@ -181,7 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let appIcons = AppIconSettings()
 
     let model = MenuModel()
-    private let popover = NSPopover()
+    @MainActor private lazy var menuPanel = MenuPanel()
     private var statusItem: NSStatusItem?
     private var statusUpdates: AnyCancellable?
 
@@ -197,8 +196,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button?.image = MenuBarIcon.image(protectedCount: inventory.protected.count)
             button?.setAccessibilityValue(inventory.menuBarStatus)
         }
-        popover.behavior = .transient
-        popover.animates = false
         DispatchQueue.main.async {
             self.model.finderRegistration.offerRecoveryAtLaunch { title, detail in
                 let alert = NSAlert()
@@ -212,23 +209,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func toggleMenu(_ sender: NSStatusBarButton) {
-        if popover.isShown {
-            popover.performClose(sender)
-            return
-        }
-        guard let screen = sender.window?.screen else { return }
-        // Leave room for the native popover arrow and the screen-edge inset.
-        let height = screen.visibleFrame.height - 32
-        let menu = DriveMenu(model: model, requestQuit: requestQuit, availableHeight: height)
-        if let host = popover.contentViewController as? NSHostingController<DriveMenu> {
-            host.rootView = menu
+    @MainActor @objc private func toggleMenu(_ sender: NSStatusBarButton) {
+        if menuPanel.isVisible {
+            menuPanel.dismiss()
         } else {
-            let host = NSHostingController(rootView: menu)
-            host.sizingOptions = [.preferredContentSize]
-            popover.contentViewController = host
+            menuPanel.show(below: sender) { height in
+                DriveMenu(model: model, requestQuit: requestQuit, availableHeight: height, dismiss: menuPanel.dismiss)
+            }
         }
-        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
     }
 
     private var confirmingQuit = false
