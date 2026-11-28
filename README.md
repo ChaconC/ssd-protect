@@ -57,9 +57,8 @@ Open **Settings → General** to configure SSD Protect:
 The **App icon** picker offers System, Light Cradle and Dark Cradle for the
 running app and About. Finder uses the installed bundle’s system icon.
 
-The menu omits the startup disk and groups simulator disk images under a
-collapsed disclosure. It lists other mounted disk images and network shares
-with their eligibility. Drive capacity is counted once per physical device.
+The menu omits the startup disk and disk images, including installers and simulator runtimes.
+It lists network shares with their eligibility. Drive capacity is counted once per physical device.
 Multi-store APFS containers and unverified devices are informational.
 
 Click the eject symbol to disconnect a supported drive while keeping its protection
