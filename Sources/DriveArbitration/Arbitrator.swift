@@ -105,6 +105,11 @@ private let completed: DADiskUnmountCallback = { _, dissent, context in
     Unmanaged<Reply>.fromOpaque(context!).takeRetainedValue().handler(dissent)
 }
 
+public enum ProtectionNotice: Equatable {
+    case changed(String, enabled: Bool)
+    case restored([String])
+}
+
 // The app owns one instance for its lifetime. All DA state and callbacks share this queue.
 public final class Arbitrator {
     private let queue = DispatchQueue(label: "SSDProtect.DiskArbitration")
@@ -121,6 +126,8 @@ public final class Arbitrator {
     private var message = ""
     private var started = false
 
+    private let protectionNotice: (ProtectionNotice) -> Void
+    private var awaitingLaunchRestore: Bool
     private let topologyChanged: () -> Void
     private let verifier = DispatchQueue(label: "SSDProtect.VerifyAPFS", qos: .userInitiated)
     private let readForRecheck: (Bool) throws -> [InventoryRow]
@@ -135,14 +142,16 @@ public final class Arbitrator {
     private var pendingSaves: Set<UInt64> = []
     private var pendingRemovals: Set<UInt64> = []
 
-    public convenience init(restorationDefaults: UserDefaults? = nil, topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
-        self.init(testImageID: nil, restorationDefaults: restorationDefaults, topologyChanged: topologyChanged, update: update)
+    public convenience init(restorationDefaults: UserDefaults? = nil, protectionNotice: @escaping (ProtectionNotice) -> Void = { _ in }, topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
+        self.init(testImageID: nil, restorationDefaults: restorationDefaults, protectionNotice: protectionNotice, topologyChanged: topologyChanged, update: update)
     }
 
     init(testImageID: UInt64?, restorationDefaults: UserDefaults? = nil,
-         readForRecheck: ((Bool) throws -> [InventoryRow])? = nil, topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
+         readForRecheck: ((Bool) throws -> [InventoryRow])? = nil, protectionNotice: @escaping (ProtectionNotice) -> Void = { _ in }, topologyChanged: @escaping () -> Void = {}, update: @escaping (Inventory) -> Void) {
         self.readForRecheck = readForRecheck ?? { try DriveInventory.read(testImageID: testImageID, includeRestoreIdentity: $0) }
         restoration = RestoreRules(defaults: restorationDefaults)
+        awaitingLaunchRestore = restoration.enabled && restoration.hasChoices
+        self.protectionNotice = protectionNotice
         self.testImageID = testImageID
         self.topologyChanged = topologyChanged
         deliver = update
@@ -178,12 +187,17 @@ public final class Arbitrator {
         return media
     }
 
+    private func notify(_ notice: ProtectionNotice) {
+        DispatchQueue.main.async { self.protectionNotice(notice) }
+    }
+
     public func protect(_ target: Drive, enabled: Bool) {
         queue.async {
             guard self.active == nil, self.fresh(target)?.drive == target else {
                 self.report("Drive changed. Reopen the drive menu.")
                 return
             }
+            let changed = self.policy.enrolled.contains(target.id) != enabled
             if enabled {
                 self.policy.enrolled.insert(target.id)
                 self.saveSelection(target.id)
@@ -191,13 +205,14 @@ public final class Arbitrator {
                 self.policy.enrolled.remove(target.id)
                 self.removeSelection(target.id)
             }
+            if changed { self.notify(.changed(target.name, enabled: enabled)) }
             self.publish()
         }
     }
 
     public func protect(_ target: APFSProtectionTarget, enabled: Bool, completion: ((Bool) -> Void)? = nil) {
         guard enabled else {
-            disableAPFSProtection(for: target.id)
+            disableAPFSProtection(for: target.id, named: target.noticeName)
             queue.async { DispatchQueue.main.async { completion?(true) } }
             return
         }
@@ -208,8 +223,11 @@ public final class Arbitrator {
         }
     }
 
-    public func disableAPFSProtection(for attachment: UInt64) {
+    public func disableAPFSProtection(for attachment: UInt64, named name: String? = nil) {
         queue.async {
+            if let bsd = self.enrollments.roots[attachment] {
+                self.notify(.changed(name ?? self.apfsRules[attachment]?.noticeName ?? bsd, enabled: false))
+            }
             self.pendingEnrollment.removeValue(forKey: attachment)
             self.enrollments.remove(attachment)
             self.removeSelection(attachment)
@@ -239,6 +257,7 @@ public final class Arbitrator {
                     DispatchQueue.main.async { completion?(false) }
                     return
                 }
+                if self.apfsRules[target.id] == nil { self.notify(.changed(target.noticeName, enabled: true)) }
                 self.enrollments.enroll(target)
                 self.saveSelection(target.id)
                 self.rememberMembers(of: target)
@@ -252,6 +271,7 @@ public final class Arbitrator {
         queue.async {
             guard self.restoration.enabled != enabled else { return }
             self.topologyRevision &+= 1
+            self.awaitingLaunchRestore = false
             self.restoration.setEnabled(enabled)
             self.pendingRemovals.removeAll()
             self.pendingSaves = enabled ? self.policy.enrolled.union(self.enrollments.roots.keys) : []
@@ -307,6 +327,7 @@ public final class Arbitrator {
         }
         restoration.recheckRestored(targets, evidence: evidence, ejecting: active?.drive, leaf: &policy, apfs: &enrollments)
 
+        var restoredNames: [String] = []
         for row in liveRows {
             guard let id = row.attachment else { continue }
             if pendingRemovals.contains(id) {
@@ -336,7 +357,12 @@ public final class Arbitrator {
                 enrollments.enroll(apfs)
                 rememberMembers(of: apfs)
             }
+            restoredNames.append(row.name)
             restoration.bindRestored(id, evidence: evidence)
+        }
+        if awaitingLaunchRestore {
+            awaitingLaunchRestore = false
+            if !restoredNames.isEmpty { notify(.restored(restoredNames.sorted())) }
         }
         // An explicit choice with insufficient or duplicate identity is session-only.
         pendingSaves.removeAll()
@@ -874,6 +900,9 @@ extension Arbitrator {
                           mountedPath() == path else {
                         end("Couldn’t verify the new mount at \(path.path). Check the drive in Finder.")
                         return
+                    }
+                    if (self.enrollments.roots[target.id] != nil) != enabled {
+                        self.notify(.changed(path.lastPathComponent, enabled: enabled))
                     }
                     if enabled {
                         self.enrollments.enroll(target)
