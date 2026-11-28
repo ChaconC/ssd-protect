@@ -9,30 +9,48 @@ struct AppSettings: View {
     @ObservedObject var appIcons: AppIconSettings
     @StateObject var login = LoginItem()
 
-    var body: some View {
-        TabView {
-            GeneralSettings(model: model, restoresProtection: $restoresProtection, sessionOnlyCount: sessionOnlyCount, login: login, appIcons: appIcons)
-                .tabItem { Label("General", systemImage: "gearshape") }
-            AboutSettings(appIcons: appIcons)
-                .tabItem { Label("About", systemImage: "info.circle") }
-        }
-        .frame(width: 392)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-struct GeneralSettings: View {
-    @ObservedObject var model: MenuModel
-    private var finderHelper: FinderRegistration { model.finderRegistration }
+    @State private var selection: SettingsSection = .general
     @AppStorage("hideFinderEject") private var hideFinderEject = false
-    @Binding var restoresProtection: Bool
-    let sessionOnlyCount: Int
-    @ObservedObject var login: LoginItem
-    @ObservedObject var appIcons: AppIconSettings
+    private var finderHelper: FinderRegistration { model.finderRegistration }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 7) {
+        NavigationSplitView {
+            List(SettingsSection.allCases, id: \.self, selection: $selection) { section in
+                Label(section.rawValue, systemImage: section.symbol)
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(ideal: 156)
+        } detail: {
+            Group {
+                switch selection {
+                case .general: general
+                case .protection: protection
+                case .about: AboutSettings(appIcons: appIcons)
+                }
+            }
+            .navigationTitle(selection.rawValue)
+        }
+        .frame(minWidth: 630, idealWidth: 680, minHeight: 420, idealHeight: 470)
+        .onAppear(perform: refresh)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
+    }
+
+    private func refresh() {
+        login.refresh()
+        finderHelper.refresh()
+    }
+
+    private var general: some View {
+        Form {
+            Section {
+                Picker("Appearance", selection: Binding(get: { appIcons.choice }, set: appIcons.select)) {
+                    ForEach(AppIconChoice.allCases, id: \.self) { choice in
+                        Text(choice.title).tag(choice)
+                    }
+                }
+                if let error = appIcons.errorMessage { Text(error).foregroundStyle(.secondary) }
+            }
+            Section {
                 Toggle(isOn: Binding(
                     get: { login.status == .enabled || login.status == .requiresApproval },
                     set: login.setRequested
@@ -48,8 +66,14 @@ struct GeneralSettings: View {
                     Button("Open Login Items…") { SMAppService.openSystemSettingsLoginItems() }
                 }
             }
-            Divider()
-            VStack(alignment: .leading, spacing: 7) {
+        }
+        .formStyle(.grouped)
+        .toggleStyle(.switch)
+    }
+
+    private var protection: some View {
+        Form {
+            Section {
                 Toggle(isOn: $restoresProtection) {
                     Text("Restore protection on launch").frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -60,12 +84,11 @@ struct GeneralSettings: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Divider()
-            VStack(alignment: .leading, spacing: 7) {
+            Section {
                 Toggle("Hide Finder Eject on protection changes", isOn: $hideFinderEject)
                 Text("Hiding Eject remounts an eligible unencrypted APFS volume. This option applies only to unencrypted volumes.").foregroundStyle(.secondary)
             }
-            VStack(alignment: .leading, spacing: 7) {
+            Section {
                 Toggle("Hide Finder Eject on encrypted APFS", isOn: Binding(
                     get: { finderHelper.requested },
                     set: { enabled in
@@ -84,34 +107,9 @@ struct GeneralSettings: View {
                 FinderApprovalAction(registration: finderHelper)
                     .disabled(model.disablingFinderHelper || !model.finderRequests.isEmpty)
             }
-            Divider()
-            VStack(alignment: .leading, spacing: 8) {
-                Text("App icon")
-                Picker("App icon", selection: Binding(get: { appIcons.choice }, set: appIcons.select)) {
-                    ForEach(AppIconChoice.allCases, id: \.self) { choice in
-                        VStack(spacing: 4) {
-                            Image(nsImage: appIcons.preview(choice)).resizable().interpolation(.high)
-                                .frame(width: 38, height: 38).accessibilityHidden(true)
-                            Text(choice.title)
-                        }
-                        .frame(width: 82)
-                        .tag(choice)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.radioGroup)
-                .horizontalRadioGroupLayout()
-                if let error = appIcons.errorMessage { Text(error).foregroundStyle(.secondary) }
-            }
         }
+        .formStyle(.grouped)
         .toggleStyle(.switch)
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(24)
-        .onAppear { login.refresh(); finderHelper.refresh() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            login.refresh()
-            finderHelper.refresh()
-        }
     }
 
     private var loginDescription: String {
@@ -121,6 +119,20 @@ struct GeneralSettings: View {
         case .requiresApproval: return "Allow SSD Protect in Login Items to finish enabling automatic launch."
         case .notFound: return "macOS couldn’t find this login item. Open the installed copy of SSD Protect and try again."
         @unknown default: return "macOS couldn’t report the login item’s status."
+        }
+    }
+}
+
+private enum SettingsSection: String, CaseIterable {
+    case general = "General"
+    case protection = "Protection"
+    case about = "About"
+
+    var symbol: String {
+        switch self {
+        case .general: "gearshape"
+        case .protection: "shield"
+        case .about: "info.circle"
         }
     }
 }
