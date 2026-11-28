@@ -118,7 +118,8 @@ public final class Arbitrator {
     private var active: (token: UUID, drive: UInt64)?
     private var finderRecovery: [UInt64: FinderStagingMount] = [:]
     private var uncertain: Set<UInt64> = []
-    private var message = ""
+    private lazy var feedbackExpiry = FeedbackExpiry(queue: queue)
+    private var message = "" { didSet { feedbackExpiry.cancel() } }
     private var started = false
 
     private let topologyChanged: () -> Void
@@ -554,7 +555,7 @@ public final class Arbitrator {
                 clearAttachment(target.id) // Preserve the saved preference for the next mount.
                 topologyDidChange()
             }
-            guard live == target.id else { endEnrollment(); finish("Ejected \(name)."); return }
+            guard live == target.id else { endEnrollment(); finish("Ejected \(name).", transient: true); return }
             verifier.async {
                 let rows = try? self.readForRecheck(false)
                 let current = rows?.first { $0.attachment == target.id }?.apfsTarget
@@ -562,13 +563,13 @@ public final class Arbitrator {
                     guard self.active?.token == token else { return }
                     if let current, current.mountedVolumes.isEmpty {
                         endEnrollment()
-                        self.finish("Unmounted \(name). The drive is still connected.")
+                        self.finish("Unmounted \(name). The drive is still connected.", transient: true)
                     } else if let current, !current.mountedVolumes.isEmpty {
                         self.finish("\(name) is still mounted.")
                     } else {
                         let live = DADiskCreateFromBSDName(nil, session, target.wholeBSD).flatMap(Media.attachmentID)
                         if live != target.id { endEnrollment() }
-                        self.finish(live == target.id ? "Couldn’t verify the mount state of \(name)." : "Ejected \(name).")
+                        self.finish(live == target.id ? "Couldn’t verify the mount state of \(name)." : "Ejected \(name).", transient: live != target.id)
                     }
                 }
             }
@@ -612,8 +613,8 @@ public final class Arbitrator {
                                     finish("Drive changed. Reopen the drive menu.")
                                     return
                                 }
-                                finish(fresh.description[kDADiskDescriptionVolumePathKey] is URL
-                                       ? "Mounted \(name)." : "\(name) is unmounted.")
+                                let mounted = fresh.description[kDADiskDescriptionVolumePathKey] is URL
+                                finish(mounted ? "Mounted \(name)." : "\(name) is unmounted.", transient: mounted)
                             }
                         }
                         if requested {
@@ -633,7 +634,7 @@ public final class Arbitrator {
                             finish("Couldn’t verify the mount for \(name).")
                             return
                         }
-                        finish("Mounted \(name).")
+                        finish("Mounted \(name).", transient: true)
                     }
                     DADiskMount(disk, nil, 0, completed, reply.retainedContext())
                 }
@@ -701,7 +702,7 @@ public final class Arbitrator {
                 let reply = Reply { [weak self] dissent in
                     guard let self, self.active?.token == token else { return }
                     if let dissent { self.failed("Eject", dissent) }
-                    else { self.finish("Ejected \(target.name).") }
+                    else { self.finish("Ejected \(target.name).", transient: true) }
                 }
                 DADiskEject(unmounted.disk, 0, completed, reply.retainedContext())
             }
@@ -724,12 +725,15 @@ public final class Arbitrator {
         return "\(step) failed. \(reason)"
     }
 
-    private func finish(_ message: String) {
+    private func finish(_ message: String, transient: Bool = false) {
         apfsPermit = nil
         active = nil
         policy.operation = nil
         scheduleRecheck(after: 0)
         report(message)
+        if transient {
+            feedbackExpiry.schedule { [weak self] in self?.report("") }
+        }
     }
 
     private func report(_ text: String) {
@@ -845,9 +849,9 @@ extension Arbitrator {
     private func remountForFinder(_ target: APFSProtectionTarget, disk: DADisk, bsd: String, member: UInt64,
                                   flags: UInt32, enabled: Bool, token: UUID, staging: FinderStagingMount?, retrying: Bool) {
         guard let path = target.finderVolume else { finish("The original mount path is unavailable."); return }
-        func end(_ text: String) {
+        func end(_ text: String, transient: Bool = false) {
             if let staging, finderRecovery[target.id] == nil { verifier.async { _ = rmdir(staging.path.path) } }
-            finish(text)
+            finish(text, transient: transient)
         }
         func valid() -> Bool {
             guard active?.token == token, let session,
@@ -883,7 +887,7 @@ extension Arbitrator {
                         self.enrollments.remove(target.id)
                         self.removeSelection(target.id)
                     }
-                    end(enabled ? "Protected \(path.lastPathComponent) with the Finder mount option." : "Restored the standard mount for \(path.lastPathComponent).")
+                    end(enabled ? "Protected \(path.lastPathComponent) with the Finder mount option." : "Restored the standard mount for \(path.lastPathComponent).", transient: true)
                 }
             }
         }

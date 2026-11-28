@@ -10,7 +10,16 @@ final class MenuModel: ObservableObject {
     @Published var scanMessage: String? = "Reading drive inventory…"
     @Published private(set) var finderFlags: [UInt64: Bool] = [:]
     @Published private(set) var finderRequests: [UInt64: UUID] = [:]
-    @Published var finderUpdateMessage: String?
+    private let finderExpiry = FeedbackExpiry(queue: .main)
+    @Published private(set) var finderUpdateMessage: String? {
+        didSet { finderExpiry.cancel() }
+    }
+
+    private func showFinderSuccess(_ text: String) {
+        finderUpdateMessage = text
+        finderExpiry.schedule { [weak self] in self?.finderUpdateMessage = nil }
+    }
+
     @Published var offersFinderRelaunch = false
     @Published private(set) var disablingFinderHelper = false
     @Published private(set) var helperSettingsMessage: String?
@@ -130,7 +139,7 @@ final class MenuModel: ObservableObject {
                 switch result {
                 case .success:
                     self.offersFinderRelaunch = true
-                    self.finderUpdateMessage = "Finder flag verified \(set ? "on" : "off") for \(path.lastPathComponent). Relaunch Finder to refresh its Eject controls."
+                    self.showFinderSuccess("Finder flag verified \(set ? "on" : "off") for \(path.lastPathComponent). Relaunch Finder to refresh its Eject controls.")
                 case .failure(let error):
                     self.finderUpdateMessage = "Finder update failed for \(path.lastPathComponent). \(error.localizedDescription)"
                 }
@@ -194,7 +203,7 @@ final class MenuModel: ObservableObject {
                 switch result {
                 case .success:
                     self.offersFinderRelaunch = true
-                    self.finderUpdateMessage = "Finder mount flags cleared. Relaunch Finder to refresh its Eject controls."
+                    self.showFinderSuccess("Finder mount flags cleared. Relaunch Finder to refresh its Eject controls.")
                     self.finishFinderDisable(registration, error: nil)
                 case .failure(let error):
                     self.finishFinderDisable(registration, error: error)
@@ -236,7 +245,7 @@ final class MenuModel: ObservableObject {
             return
         }
         offersFinderRelaunch = false
-        finderUpdateMessage = "Finder relaunch requested."
+        showFinderSuccess("Finder relaunch requested.")
     }
 
     func confirm(_ drive: Drive) {
